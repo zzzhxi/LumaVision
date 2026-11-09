@@ -1,0 +1,32 @@
+data/
+test-results/
+.pnpm-store/
+.wrangler/
+node_modules/
+dist/
+**/node_modules/
+**/dist/
+**/.wrangler/
+**/.sites-runtime/
+**/.env
+.openai/hosting.json
+**/.openai/hosting.json
+*.log
+.tmp_*
+Thumbs.db
+.DS_Store
+mail.local.json
+tools/media/*.exe
+
+# 本地开发记录与决策，不进入仓库
+findings.md
+progress.md
+task_plan.md
+
+# 部署身份记录（Sites Worker 源码与托管身份），不进入仓库
+sites/
+sites-current/
+
+# 本地部署验收记录与项目协作说明，不进入仓库
+docs/
+AGENTS.md

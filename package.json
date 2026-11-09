@@ -1,0 +1,12 @@
+{
+  "name": "lumavision",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "check": "node --check app.js && node --check studio.js && node --check auth-ui.js && node --check drafts.js && node --check media.js && node --check data.js && node --check server.mjs && node --check storage.mjs && node --check generations.mjs && node --check auth.mjs && node --check captcha.mjs && node --check email.mjs && node --check gmail.mjs && node --check mail-config.mjs && node --check record-index.mjs && node --check work-query.mjs && node --check multipart.mjs && node --check derivatives.mjs && node --check scripts/import-twitter-works.mjs && node --check scripts/audit-media.mjs && node --check scripts/build-thumbnails.mjs && node --check scripts/benchmark-metadata.mjs && node --check write-lock.mjs && node --check scripts/benchmark-import.mjs && node --check generation-service.mjs && node --check generation-ui.js",
+    "test": "node --test tests/*.test.mjs"
+  }
+}

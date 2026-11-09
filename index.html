@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="LumaVision 图片与视频提示词灵感库。发现、收藏与编辑你的下一个创意。">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="theme-color" content="#f8f9fc">
+  <title>LumaVision — 发现灵感，即刻开始。</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/uploads.css"><link rel="stylesheet" href="/auth.css">
+</head>
+<body>
+  <a class="skip-link" href="#gallery">跳到灵感库</a>
+  <header class="topbar"><div class="nav-wrap">
+    <a class="brand" href="#explore" aria-label="LumaVision 首页"><svg viewBox="0 0 40 40" aria-hidden="true"><ellipse cx="20" cy="20" rx="9" ry="16" transform="rotate(-35 20 20)"/><ellipse cx="20" cy="20" rx="9" ry="16" transform="rotate(35 20 20)"/></svg><span>LumaVision<span class="brand-dot">.</span></span></a>
+    <p class="brand-caption">你的视觉灵感工作室</p>
+    <nav aria-label="主导航"><button class="nav-link active" data-view="explore"><span data-icon="home"></span>探索灵感</button><button class="nav-link" data-action="search"><span data-icon="search"></span>搜索提示词 <kbd>/</kbd></button><button class="nav-link" data-view="collections"><span data-icon="bookmark"></span>我的收藏 <span id="saved-count"></span></button><button class="nav-link" data-view="recent"><span data-icon="update"></span>最近更新</button><button class="nav-link" data-view="creations"><span data-icon="image"></span>我的作品</button><button class="nav-link" data-view="review" hidden><span data-icon="check"></span>审核管理</button></nav>
+    <div class="creation-nav"><button class="nav-link" data-view="drafts"><span data-icon="sparkles"></span>创作台</button></div>
+    <details class="sidebar-categories"><summary class="sidebar-label">风格分类 <span>⌄</span></summary><div class="category-list" role="group" aria-label="风格分类"></div></details>
+    <div class="sidebar-bottom"><div class="sidebar-tip"><span data-icon="sparkles"></span><strong>让灵感接着发生</strong><p>找到喜欢的画面，套用提示词，<br>再加入你的想法。</p></div>
+    <div id="account-area"><button class="account-chip account-start" data-action="login"><span>开始使用</span><span data-icon="arrow"></span></button></div>
+    <button class="sidebar-about" data-action="about">关于 LumaVision <span data-icon="arrow-up-right"></span></button></div>
+  </div></header>
+  <main>
+    <section class="intro" aria-labelledby="page-title"><div><p class="eyebrow">THE PROMPT GALLERY</p><h1 id="page-title">发现灵感，<span>即刻开始。</span></h1><p class="intro-copy">看见喜欢的画面，让它成为你的创作起点。</p></div><button id="publish-work" class="button dark intro-action" data-action="publish" hidden><span data-icon="plus"></span><span>发布作品</span></button><button id="start-creation" class="button dark intro-action" data-action="create" hidden><span data-icon="sparkles"></span><span>开始创作</span></button></section>
+    <section id="page-view" class="page-view" hidden></section>
+    <section id="gallery" class="gallery-section" aria-labelledby="gallery-title">
+      <div class="gallery-heading"><div class="section-title"><h2 id="gallery-title">发现灵感</h2><span id="result-count"></span></div><div class="media-tabs" role="group" aria-label="内容类型"><button class="selected" data-type="all">全部</button><button data-type="image"><span data-icon="image"></span>图片</button><button data-type="video"><span data-icon="video"></span>视频</button></div></div>
+      <div class="search-row"><label class="search-box"><span data-icon="search"></span><input id="search" aria-label="搜索提示词" type="search" placeholder="搜索你的下一个灵感，试试「电影感」" autocomplete="off"><kbd>/</kbd></label></div>
+      <div class="filter-row"><div class="model-list" role="group" aria-label="快速模型筛选"><div class="model-group"><button data-model="all" class="active">全部模型</button></div><div class="model-group" role="group" aria-label="图片模型"><span class="model-group-label">图片</span><button data-model="GPT Image">GPT Image</button><button data-model="Nano Banana">Nano Banana</button><button data-model="Midjourney">Midjourney</button><button data-model="FLUX">FLUX</button><button data-model="Seedream">Seedream</button></div><div class="model-group" role="group" aria-label="视频模型"><span class="model-group-label">视频</span><button data-model="Seedance">Seedance</button><button data-model="Kling">Kling</button><button data-model="Wan">Wan</button><button data-model="Hailuo">Hailuo</button></div></div><button class="gallery-search-toggle icon-button" data-action="search" aria-label="搜索提示词"><span data-icon="search"></span></button><div class="sort-tabs work-status-tabs" role="group" aria-label="作品状态" hidden><button data-work-status="draft" aria-pressed="false" title="点击筛选草稿，再次点击显示全部状态">草稿</button><button data-work-status="pending" aria-pressed="false" title="点击筛选审核中的作品，再次点击显示全部状态">审核中</button><button data-work-status="rejected" aria-pressed="false" title="点击筛选审核驳回的作品，再次点击显示全部状态">审核驳回</button><button data-work-status="withdrawn" aria-pressed="false" title="点击管理下架作品，再次点击返回其他作品">作品下架</button></div><div class="sort-tabs studio-tabs" role="group" aria-label="创作台分类" hidden><button data-studio-tab="drafts" class="active" aria-pressed="true">草稿</button><button data-studio-tab="generations" aria-pressed="false">生成记录</button><button data-studio-tab="submissions" aria-pressed="false">我的投稿</button></div><div class="sort-tabs" data-gallery-sort role="group" aria-label="广场排序"><button class="active" data-sort="featured">精选</button><button data-sort="newest">最新</button><button data-sort="popular">最热</button></div></div>
+      <div class="filter-summary" hidden><span id="filter-copy"></span><button data-action="clear-filters">清除筛选 <span data-icon="x"></span></button></div>      <div id="studio-status" class="site-status" role="status" hidden></div><div id="works-status" class="site-status" role="status" hidden></div><div id="cards" class="cards" aria-live="polite"></div>
+      <div id="empty" class="empty" hidden><span data-icon="search"></span><h3>还没有找到这份灵感</h3><p>换一个关键词，或清除筛选重新探索。</p><button class="button dark" data-action="reset">查看全部灵感</button></div>
+      <div class="gallery-end"><span class="end-line"></span><span id="end-copy">灵感没有终点，创作从这里开始。</span><span class="end-line"></span></div>
+    </section>
+  </main>
+  <footer><a class="footer-brand" href="#explore">LumaVision.</a><span>为想象力，留一点空间。</span><button data-action="about">关于这个灵感库 <span data-icon="arrow-up-right"></span></button><span class="copyright">© 2026 LumaVision</span></footer>
+  <dialog id="detail" aria-labelledby="detail-title"></dialog>
+  <dialog id="editor" aria-labelledby="editor-title"></dialog>
+  <dialog id="creator" aria-labelledby="creator-title"></dialog>
+  <dialog id="auth" aria-labelledby="auth-title" aria-describedby="auth-description"></dialog>
+  <dialog id="social" aria-labelledby="social-title"></dialog>
+  <dialog id="nickname" aria-labelledby="nickname-title"></dialog>
+  <dialog id="password" class="mini-dialog" aria-labelledby="password-title"></dialog>
+  <dialog id="generation-settings" aria-labelledby="generation-settings-title"></dialog>
+  <dialog id="reject" class="reject-dialog" aria-labelledby="reject-title"></dialog>
+ <dialog id="confirm" class="mini-dialog" aria-labelledby="confirm-title"></dialog>
+  <dialog id="about" class="about-dialog" aria-labelledby="about-title"><button class="icon-button close" data-close="about" aria-label="关闭"><span data-icon="x"></span></button><p class="eyebrow">ABOUT LUMAVISION</p><h2 id="about-title">灵感，是创作的开始。</h2><p>一个用于发现、收藏与打磨图片和视频提示词的个人空间。</p><p>画廊采用原创示例提示词与 Unsplash 参考照片。照片用于表达视觉方向，并非对应提示词的模型生成结果；视频条目使用静态分镜参考。</p><p>上传作品的提示词、图片和视频保存在当前网站，可编辑并展示多张图片。收藏和未发布的文本草稿保存在当前浏览器；图片生成由管理员配置服务后使用，生成记录仅当前账号可见；视频生成暂未接入。</p><a href="https://www.meigen.ai/" target="_blank" rel="noreferrer">浏览流程参考 MeiGen ↗</a></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
