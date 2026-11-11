@@ -26,7 +26,7 @@ const storedDrafts = read('drafts', []);
 const safeDrafts = Array.isArray(storedDrafts) ? storedDrafts.filter(p => p && typeof p.id === 'string' && p.id.startsWith('custom-') && typeof p.title === 'string' && typeof p.prompt === 'string' && ['image','video'].includes(p.type) && Array.isArray(p.tags)) : [];
 const storedSaved = read('saved', []);
 const workStatusLabels={draft:'草稿',pending:'审核中',rejected:'审核驳回',withdrawn:'作品下架'};
-const state = { view:'explore', type:'all', category:'全部灵感', query:'', model:'all', sort:'featured', workStatus:'all', saved:new Set(Array.isArray(storedSaved) ? storedSaved.filter(x=>typeof x==='string') : []), drafts:safeDrafts, works:[], user:null, emailDelivery:'demo', myWorks:[], viewUser:null, userWorks:[], userViewId:null, reviewPending:[], reviewRejected:[], creatorPending:[] };
+const state = { view:'explore', type:'all', category:'全部灵感', query:'', model:'all', sort:'featured', workStatus:'all', saved:new Set(Array.isArray(storedSaved) ? storedSaved.filter(x=>typeof x==='string') : []), drafts:safeDrafts, works:[], user:null, emailDelivery:'demo', myWorks:[], viewUser:null, userWorks:[], userViewId:null, reviewPending:[], reviewRejected:[], reviewWithdrawn:[], creatorPending:[], adminTab:'users', adminUsers:[], adminUserTotal:0, adminUserPages:1, adminUserCounts:null, adminUserError:'', adminUserFilters:{q:'',role:'all',status:'all',creatorStatus:'all',kind:'all',page:1} };
 const storedStudioTab=read('studio-tab','drafts');
 state.studioTab=Object.hasOwn(studioTabs,storedStudioTab)?storedStudioTab:'drafts';
 state.generations=[];
@@ -73,6 +73,7 @@ function creatorSocial(social){
 let currentPrompt = null, editingId = null, toastTimer, removedDraft = null;
 let uploader=null, publishing=false, editingRecord=null, uploadId=null, lastSubmission=null, activeMedia=0;
 let sessionPromise=null, pageSeq=0, myWorksSeq=0, publicWorksSeq=0;
+let adminUsersSeq=0, adminSearchTimer=null;
 let sessionEpoch=0,detailSeq=0;
 let galleryKey='',galleryCursor=null,galleryTotal=0,galleryLoading=false,gallerySeq=0;
 let galleryHistory=[],galleryCurrentCursor=null;
@@ -105,13 +106,16 @@ function refreshGallery(){
   if(key!==galleryKey){galleryHistory=[];galleryCursor=null;galleryCurrentCursor=null;loadGalleryPage();}
 }
 function clearPrivateSession(){
-  sessionEpoch++;detailSeq++;pageSeq++;invalidateWorkReads();generationSeq++;
+  sessionEpoch++;detailSeq++;pageSeq++;adminUsersSeq++;invalidateWorkReads();generationSeq++;
+  clearTimeout(adminSearchTimer);adminSearchTimer=null;
   gallerySeq++;galleryKey='';galleryLoading=false;galleryHistory=[];galleryCursor=null;galleryCurrentCursor=null;galleryTotal=0;
-  state.myWorks=[];state.generations=[];state.reviewPending=[];state.reviewRejected=[];state.creatorPending=[];
+  state.myWorks=[];state.generations=[];state.reviewPending=[];state.reviewRejected=[];state.reviewWithdrawn=[];state.creatorPending=[];
+  state.adminUsers=[];state.adminUserTotal=0;state.adminUserPages=1;state.adminUserCounts=null;state.adminUserError='';
+  state.adminUserFilters={q:'',role:'all',status:'all',creatorStatus:'all',kind:'all',page:1};state.adminTab='users';
   state.userWorks=[];state.viewUser=null;state.userViewId=null;state.generationError=false;
   state.reviewTotal=0;state.userWorksTotal=0;userCursor=null;userHistory=[];userCurrentCursor=null;
   currentPrompt=null;editingRecord=null;editingId=null;removedDraft=null;lastSubmission=null;
-  for(const id of ['detail','editor','creator','reject','confirm','profile','password','generation-settings']){const dialog=$('#'+id);if(dialog?.open)dialog.close();}
+  for(const id of ['detail','editor','creator','reject','confirm','profile','password','generation-settings','admin-user']){const dialog=$('#'+id);if(dialog?.open)dialog.close();}
   $('#detail').innerHTML='';$('#page-view').innerHTML='';$('#studio-status').hidden=true;
   workMap.clear();workMapSources=[];
 }
@@ -176,15 +180,15 @@ function applySession(user){if(state.user?.id!==user?.id)clearPrivateSession();s
 async function logout(){
   try{await requestJson('/api/auth/logout',{method:'POST'});}catch(error){toast(error.message || '退出登录失败，请重试。');return;}
   clearPrivateSession();state.user=null;renderAccount();render();
-  if(['profile','review'].includes(state.view)||state.view==='user')go('explore');
+  if(['profile','review','admin'].includes(state.view)||state.view==='user')go('explore');
   toast('已退出登录');
 }
 function renderAccount(){
-  const reviewNav=document.querySelector('[data-view="review"]');if(reviewNav)reviewNav.hidden=state.user?.role!=='admin';
+  const adminNav=document.querySelector('[data-view="admin"]');if(adminNav)adminNav.hidden=state.user?.role!=='admin';
   renderViewActions();
   const host=$('#account-area');if(!host)return;
   if(!state.user){host.innerHTML=`<button class="account-chip account-start" data-action="login"><span>开始使用</span>${icon('arrow')}</button>`;return;}
-  host.innerHTML=`<details class="account-menu"><summary class="account-chip logged-in">${avatarHtml(state.user,26)}<span class="account-name">${escape(state.user.nickname)}</span></summary><div class="account-drop"><button data-action="open-profile">${icon('user')}个人资料</button><button data-action="open-my-page">${icon('arrow-up-right')}我的主页</button>${state.user.role==='admin'?`<button data-action="generation-settings">${icon('sliders')}生图服务</button><button data-action="open-review">${icon('check')}审核管理</button>`:''}<button data-action="logout">${icon('logout')}退出登录</button></div></details>`;
+  host.innerHTML=`<details class="account-menu"><summary class="account-chip logged-in">${avatarHtml(state.user,26)}<span class="account-name">${escape(state.user.nickname)}</span></summary><div class="account-drop"><button data-action="open-profile">${icon('user')}个人资料</button><button data-action="open-my-page">${icon('arrow-up-right')}我的主页</button>${state.user.role==='admin'?`<button data-action="open-admin">${icon('sliders')}管理后台</button>`:''}<button data-action="logout">${icon('logout')}退出登录</button></div></details>`;
 }
 function renderViewActions(){
   $('#publish-work').hidden=state.view!=='creations'||state.user?.accountType!=='creator';
@@ -234,6 +238,7 @@ async function openLogin(){
 function renderPageView(){
   if(state.view==='profile')renderProfile();
   else if(state.view==='review')openReview();
+  else if(state.view==='admin')openAdmin();
 }
 function creatorBadge(status){
   return {none:'<span class="status-chip role">个人用户</span>',pending:'<span class="status-chip pending">创作者审核中</span>',approved:'<span class="status-chip published">创作者</span>',rejected:'<span class="status-chip rejected">创作者申请未通过</span>'}[status||'none'];
@@ -278,7 +283,7 @@ function renderProfile(){
         <span class="status-chip published">已发布 ${counts.published}</span>
         <span class="status-chip pending">待审核 ${counts.pending}</span>
         <span class="status-chip rejected">未通过 ${counts.rejected}</span>
-        ${user.role==='admin'?`<button class="status-chip admin" data-view="review">${icon('check')}审核管理</button>`:''}
+        ${user.role==='admin'?`<button class="status-chip admin" data-view="admin">${icon('sliders')}管理后台</button>`:''}
       </div>
     </section>
   </div>`;
@@ -450,53 +455,318 @@ function renderUserPage(){
   decorate(host);
   host.querySelectorAll('.card-open img').forEach(img=>img.addEventListener('error',()=>img.closest('.card-visual')?.classList.add('image-failed'),{once:true}));
 }
-async function openReview(){
-  // 深链接刷新时会话尚未加载完成：等待后仍不在审核页（用户已离开）就不渲染，避免误跳转。
-  if(!state.user&&sessionPromise){await sessionPromise.catch(()=>{});if(state.view!=='review')return;}
-  if(state.user?.role!=='admin'){go('explore');return;}
-  const seq=++pageSeq;
-  const host=$('#page-view');
-  host.innerHTML='<div class="page-wrap"><button class="page-back" data-action="back-page">← 返回</button><div class="page-heading"><h2>审核管理</h2></div><p class="page-loading">正在加载待审核内容…</p></div>';
+function goAdmin(tab='users'){
+  clearTimeout(adminSearchTimer);adminSearchTimer=null;
+  const normalized=['users','works','creators','generation'].includes(tab)?tab:'users';
+  const hash='#admin'+(normalized==='users'?'':'/'+normalized);
+  if(location.hash===hash){state.adminTab=normalized;openAdmin();}else location.hash=hash;
+}
+function openReview(){goAdmin('works');}
+function adminShell(content){
+  const counts=state.adminUserCounts;
+  const summary=counts?`${counts.total} 个账号 · ${counts.admins} 个管理员 · ${counts.disabled} 个已停用`:'';
+  const tabs=[
+    ['users','用户管理',counts?.total],
+    ['works','作品审核',state.reviewTotal??state.reviewPending?.length],
+    ['creators','创作者申请',state.creatorPending?.length],
+    ['generation','生图服务',null]
+  ];
+  return `<div class="page-wrap">
+    <button class="page-back" data-action="back-page">← 返回</button>
+    <div class="page-heading"><h2>管理后台</h2>${summary?`<span>${escape(summary)}</span>`:''}</div>
+    <div class="admin-tabs" role="tablist" aria-label="管理后台分类">${tabs.map(([key,label,count])=>`<button type="button" class="admin-tab${state.adminTab===key?' active':''}" data-admin-tab="${key}" role="tab" aria-selected="${state.adminTab===key}">${escape(label)}${Number.isFinite(count)&&count>0?`<span>${count}</span>`:''}</button>`).join('')}</div>
+    ${content}
+  </div>`;
+}
+async function loadAdminCounts(){
   try{
-    const [pending,rejected]=await Promise.all([requestJson('/api/admin/works?status=pending&limit=36&cards=1'),requestJson('/api/admin/works?status=rejected&limit=10&cards=1')]);
-    if(seq!==pageSeq||state.view!=='review')return;
-    state.reviewPending=pending.works||[];state.reviewRejected=rejected.works||[];
-    state.reviewTotal=pending.total;
+    const data=await requestJson('/api/admin/users?limit=1');
+    if(state.user?.role==='admin')state.adminUserCounts=data.counts||null;
+  }catch(error){await handleAdminAuthFailure(error);}
+}
+async function handleAdminAuthFailure(error){
+  if(error?.status!==401&&error?.status!==403)return false;
+  const dialog=$('#admin-user');if(dialog?.open)dialog.close();
+  state.adminUsers=[];state.adminUserTotal=0;state.adminUserPages=1;state.adminUserCounts=null;
+  state.reviewPending=[];state.reviewRejected=[];state.reviewWithdrawn=[];state.creatorPending=[];state.reviewTotal=0;
+  await loadSession();
+  if(state.view==='admin'&&state.user?.role!=='admin')go('explore');
+  return true;
+}
+async function loadAdminUsers(seq=++adminUsersSeq){
+  const filters=state.adminUserFilters,params=new URLSearchParams({page:String(filters.page),limit:'20'});
+  if(filters.q.trim())params.set('q',filters.q.trim());
+  for(const key of ['role','status','creatorStatus','kind'])if(filters[key]&&filters[key]!=='all')params.set(key,filters[key]);
+  try{
+    const data=await requestJson('/api/admin/users?'+params);
+    if(seq!==adminUsersSeq)return false;
+    state.adminUsers=Array.isArray(data.users)?data.users:[];state.adminUserTotal=data.total||0;
+    state.adminUserPages=data.pages||1;state.adminUserFilters.page=data.page||1;
+    state.adminUserCounts=data.counts||null;state.adminUserError='';
+    return true;
   }catch(error){
-    if(seq!==pageSeq||state.view!=='review')return;
-    state.reviewPending=[];state.reviewRejected=[];state.creatorPending=null;
-    host.innerHTML=`<div class="page-wrap"><button class="page-back" data-action="back-page">← 返回</button><div class="page-empty">${icon('x')}<h3>无法加载审核列表</h3><p>${escape(error.message)}</p></div></div>`;
-    return;
+    if(seq!==adminUsersSeq)return false;
+    state.adminUsers=[];state.adminUserTotal=0;state.adminUserPages=1;
+    const authLost=await handleAdminAuthFailure(error);
+    state.adminUserError=authLost?'管理员权限已变化，请重新登录后刷新。':error.message||'账号列表加载失败，请重试。';
+    return false;
+  }
+}
+async function refreshAdminUsers(){
+  if(state.view!=='admin'||state.adminTab!=='users')return;
+  clearTimeout(adminSearchTimer);adminSearchTimer=null;
+  const seq=++adminUsersSeq;
+  await loadAdminUsers(seq);
+  if(seq===adminUsersSeq&&state.view==='admin'&&state.adminTab==='users')renderAdminUsers();
+}
+async function loadAdminReview(seq=++pageSeq){
+  try{
+    const [pending,rejected,withdrawn]=await Promise.all([
+      requestJson('/api/admin/works?status=pending&limit=36&cards=1'),
+      requestJson('/api/admin/works?status=rejected&limit=10&cards=1'),
+      requestJson('/api/admin/works?status=withdrawn&limit=36&cards=1')
+    ]);
+    if(seq!==pageSeq)return false;
+    state.reviewPending=pending.works||[];state.reviewRejected=rejected.works||[];state.reviewTotal=pending.total;
+    state.reviewWithdrawn=(withdrawn.works||[]).filter(work=>work.authorProfile?.deleted);
+    state.adminUserError='';
+  }catch(error){
+    if(seq!==pageSeq)return false;
+    state.reviewPending=[];state.reviewRejected=[];state.reviewTotal=0;
+    const authLost=await handleAdminAuthFailure(error);
+    state.adminUserError=authLost?'管理员权限已变化，请重新登录后刷新。':error.message||'审核列表加载失败，请重试。';
+    return false;
   }
   try{
     const creators=await requestJson('/api/admin/creators?status=pending');
-    if(seq!==pageSeq||state.view!=='review')return;
+    if(seq!==pageSeq)return false;
     state.creatorPending=creators.users||[];
-  }catch{
-    if(seq!==pageSeq||state.view!=='review')return;
-    // 加载失败不能伪装成“暂无申请”，否则管理员可能据此漏审。
+  }catch(error){
+    if(seq!==pageSeq)return false;
     state.creatorPending=null;
   }
-  renderReview();
+  return true;
+}
+async function openAdmin(){
+  // 深链接刷新时会话尚未加载完成：等待后仍不在后台（用户已离开）就不渲染，避免误跳转。
+  if(!state.user&&sessionPromise){await sessionPromise.catch(()=>{});if(state.view!=='admin')return;}
+  if(state.user?.role!=='admin'){go('explore');return;}
+  const host=$('#page-view');
+  if(state.adminTab==='users'){
+    clearTimeout(adminSearchTimer);adminSearchTimer=null;
+    const seq=++adminUsersSeq;
+    host.innerHTML=adminShell('<p class="page-loading">正在加载账号…</p>');
+    await loadAdminUsers(seq);
+    if(seq!==adminUsersSeq||state.view!=='admin'||state.adminTab!=='users')return;
+    renderAdminUsers();
+    return;
+  }
+  clearTimeout(adminSearchTimer);adminSearchTimer=null;
+  const seq=++pageSeq;
+  if(state.adminTab==='works'||state.adminTab==='creators'){
+    host.innerHTML=adminShell('<p class="page-loading">正在加载审核内容…</p>');
+    const countsPromise=state.adminUserCounts?Promise.resolve():loadAdminCounts();
+    await Promise.all([loadAdminReview(seq),countsPromise]);
+    if(seq!==pageSeq||state.view!=='admin')return;
+    renderAdminReview();
+    return;
+  }
+  if(!state.adminUserCounts)await loadAdminCounts();
+  if(seq!==pageSeq||state.view!=='admin')return;
+  renderAdminPage();
+}
+function renderAdminPage(){
+  const host=$('#page-view');
+  if(state.adminTab==='users'){renderAdminUsers();return;}
+  if(state.adminTab==='works'||state.adminTab==='creators'){renderAdminReview();return;}
+  host.innerHTML=adminShell(`<section class="card-block admin-generation-card">
+    <div><h3 class="block-title">生图服务</h3><p class="profile-hint">由管理员统一配置 API 地址、密钥和可用模型；配置只保存在本机私有文件中。</p></div>
+    <button class="button dark" data-action="generation-settings">${icon('sliders')}打开生图配置</button>
+  </section>`);
+  decorate(host);
+}
+function adminRoleChip(role){return role==='admin'?'<span class="status-chip admin-chip">管理员</span>':'<span class="status-chip role">用户</span>';}
+function adminCreatorChip(status){
+  return {none:'<span class="status-chip role">个人用户</span>',pending:'<span class="status-chip pending">创作者审核中</span>',approved:'<span class="status-chip published">创作者</span>',rejected:'<span class="status-chip rejected">创作者未通过</span>'}[status||'none'];
+}
+function adminStatusChip(user){
+  if(user.deletedAt)return '<span class="status-chip rejected">已注销</span>';
+  if(user.disabledAt)return '<span class="status-chip pending">已停用</span>';
+  return '<span class="status-chip published">正常</span>';
+}
+function adminUserRow(user){
+  const last=user.lastLoginAt?new Date(user.lastLoginAt).toLocaleDateString('zh-CN'):'—';
+  return `<div class="admin-user-row">
+    ${avatarHtml(user,40)}
+    <div class="admin-user-main"><strong>${escape(user.nickname)}</strong><span>${escape(user.email)}</span></div>
+    <div class="admin-user-badges">${adminRoleChip(user.role)}${adminCreatorChip(user.creatorStatus)}${adminStatusChip(user)}${user.importedAuthor?'<span class="status-chip role">导入作者</span>':''}</div>
+    <div class="admin-user-stat"><strong>${user.works?.total??0}</strong><span>作品</span></div>
+    <div class="admin-user-last"><strong>${last}</strong><span>最近登录</span></div>
+    <button class="button soft" data-admin-user="${escape(user.id)}">${user.deletedAt||user.importedAuthor?'查看':'管理'}</button>
+  </div>`;
+}
+function renderAdminUsers(){
+  const host=$('#page-view'),filters=state.adminUserFilters;
+  const select=(key,label,items)=>{
+    const current=filters[key];
+    return `<label class="field admin-filter">${escape(label)}<select data-admin-filter="${key}">${items.map(([value,text])=>`<option value="${value}" ${current===value?'selected':''}>${escape(text)}</option>`).join('')}</select></label>`;
+  };
+  const hadSearchFocus=document.activeElement?.id==='admin-user-search';
+  const rows=state.adminUsers.map(adminUserRow).join('');
+  const error=state.adminUserError?`<div class="site-status admin-status-error" role="alert">${escape(state.adminUserError)}</div>`:'';
+  const list=state.adminUsers.length?`<div class="admin-user-list">${rows}</div>`:'<div class="page-empty small">没有找到符合条件的账号。</div>';
+  host.innerHTML=adminShell(`
+    <section class="card-block admin-filter-card">
+      <div class="admin-search-row">
+        <label class="search-box admin-search"><span data-icon="search"></span><input id="admin-user-search" type="search" maxlength="120" autocomplete="off" placeholder="搜索邮箱、昵称或用户 ID" value="${escape(filters.q)}"></label>
+        <button class="button soft" data-action="admin-user-reset">重置筛选</button>
+      </div>
+      <div class="admin-filter-grid">
+        ${select('role','角色',[['all','全部角色'],['user','用户'],['admin','管理员']])}
+        ${select('status','状态',[['all','全部状态'],['active','正常'],['disabled','已停用'],['deleted','已注销']])}
+        ${select('creatorStatus','创作者',[['all','全部创作者状态'],['none','个人用户'],['pending','审核中'],['approved','创作者'],['rejected','未通过']])}
+        ${select('kind','类型',[['all','全部账号'],['login','可登录账号'],['imported','导入作者']])}
+      </div>
+      ${error}
+    </section>
+    <section class="card-block admin-users-card">
+      ${list}
+      <div class="gallery-pager">
+        <button class="button soft" data-action="admin-users-prev" ${filters.page<=1?'disabled':''}>上一页</button>
+        <span>第 ${filters.page} / ${state.adminUserPages} 页 · ${state.adminUserTotal} 个账号</span>
+        <button class="button soft" data-action="admin-users-next" ${filters.page>=state.adminUserPages?'disabled':''}>下一页</button>
+      </div>
+    </section>`);
+  decorate(host);
+  const search=$('#admin-user-search');
+  if(search){
+    search.addEventListener('input',()=>{
+      state.adminUserFilters.q=search.value;state.adminUserFilters.page=1;
+      clearTimeout(adminSearchTimer);
+      adminSearchTimer=setTimeout(()=>{if(state.view==='admin'&&state.adminTab==='users')refreshAdminUsers();},220);
+    });
+    if(hadSearchFocus){search.focus();search.setSelectionRange(search.value.length,search.value.length);}
+  }
+  host.querySelectorAll('[data-admin-filter]').forEach(control=>control.addEventListener('change',()=>{
+    state.adminUserFilters[control.dataset.adminFilter]=control.value;state.adminUserFilters.page=1;refreshAdminUsers();
+  }));
+}
+function renderAdminReview(){
+  const host=$('#page-view');
+  const error=state.adminUserError?`<section class="card-block"><div class="site-status admin-status-error" role="alert">${escape(state.adminUserError)}</div><button type="button" class="button soft" data-action="reload-review">重新加载</button></section>`:'';
+  const creatorSection=state.creatorPending===null
+    ?'<p class="profile-empty">创作者申请加载失败。<button type="button" class="auth-link" data-action="reload-review">重新加载</button></p>'
+    :state.creatorPending.length?`<div class="review-list">${state.creatorPending.map(creatorItem).join('')}</div>`:'<p class="profile-empty">暂无创作者申请。</p>';
+  const content=error||(state.adminTab==='creators'
+    ?`<section class="card-block"><h3 class="block-title">待审核创作者申请</h3>${creatorSection}</section>`
+    :`<section class="card-block"><h3 class="block-title">待审核作品</h3>${state.reviewPending.length?`<div class="review-list">${state.reviewPending.map(reviewItem).join('')}</div>`:'<p class="profile-empty">所有作品都已处理完毕。</p>'}</section>
+      <section class="card-block"><h3 class="block-title">最近驳回作品</h3>${state.reviewRejected.length?`<div class="review-list">${state.reviewRejected.slice(0,10).map(reviewItem).join('')}</div>`:'<p class="profile-empty">暂无驳回记录。</p>'}</section>
+      <section class="card-block"><h3 class="block-title">已注销作者的下架作品</h3>${state.reviewWithdrawn.length?`<div class="review-list">${state.reviewWithdrawn.map(withdrawnAdminItem).join('')}</div>`:'<p class="profile-empty">暂无需要清理的下架作品。</p>'}</section>`);
+  host.innerHTML=adminShell(content);
+  decorate(host);
+}
+function openAdminUser(id){
+  const user=state.adminUsers.find(item=>item.id===id);if(!user)return;
+  const dialog=$('#admin-user');if(dialog.open)return;
+  const self=state.user?.id===user.id,deleted=Boolean(user.deletedAt),imported=Boolean(user.importedAuthor);
+  const readOnly=deleted||imported,envLocked=Boolean(user.envManaged)&&!readOnly;
+  const created=user.createdAt?new Date(user.createdAt).toLocaleString('zh-CN'):'—';
+  const last=user.lastLoginAt?new Date(user.lastLoginAt).toLocaleString('zh-CN'):'暂无记录';
+  const pendingOption=user.creatorStatus==='pending'?'<option value="pending" selected disabled>审核中（请在创作者申请中处理）</option>':'';
+  const rejectedOption=user.creatorStatus==='none'?'':`<option value="rejected" ${user.creatorStatus==='rejected'?'selected':''}>已驳回</option>`;
+  const note=user.creatorNote||'';
+  dialog.innerHTML=`<form id="admin-user-form" class="admin-user-form">
+    <button type="button" class="icon-button close" data-close="admin-user" aria-label="关闭">${icon('x')}</button>
+    <p class="eyebrow">ACCOUNT CONTROL</p>
+    <h2 id="admin-user-title">账号详情</h2>
+    <div class="admin-user-detail-head">${avatarHtml(user,52)}<div><strong>${escape(user.nickname)}</strong><span>${escape(user.email)}</span><div class="admin-user-badges">${adminRoleChip(user.role)}${adminCreatorChip(user.creatorStatus)}${adminStatusChip(user)}${user.importedAuthor?'<span class="status-chip role">导入作者</span>':''}</div></div></div>
+    <div class="admin-user-facts">
+      <div><span>注册时间</span><strong>${escape(created)}</strong></div>
+      <div><span>最近登录</span><strong>${escape(last)}</strong></div>
+      <div><span>作品</span><strong>${user.works?.total??0} 件</strong></div>
+      <div><span>账号类型</span><strong>${user.importedAuthor?'导入作者':user.hasPassword?'邮箱密码':'邮箱找回'}</strong></div>
+    </div>
+    ${readOnly?`<p class="admin-user-note">${deleted?'该账号已注销，仅保留历史作品归属。':'导入作者档案由迁移脚本维护，后台只读。'}</p>`:''}
+    ${envLocked?'<p class="admin-user-note">该账号由 ADMIN_EMAILS 管理；角色、停用和注销请先修改环境变量并重启服务。</p>':''}
+    ${self?'<p class="admin-user-note">不能停用、注销或降级当前登录的管理员账号。</p>':''}
+    <div class="admin-user-fields">
+      <label class="field">角色<select id="admin-user-role" ${readOnly||envLocked||self?'disabled':''}><option value="user" ${user.role==='user'?'selected':''}>用户</option><option value="admin" ${user.role==='admin'?'selected':''}>管理员</option></select></label>
+      <label class="field">创作者身份<select id="admin-user-creator" ${readOnly?'disabled':''}>${pendingOption}<option value="none" ${user.creatorStatus==='none'?'selected':''}>个人用户</option><option value="approved" ${user.creatorStatus==='approved'?'selected':''}>创作者</option>${rejectedOption}</select></label>
+    </div>
+    <label class="field" id="admin-user-note-wrap" ${user.creatorStatus==='rejected'?'':'hidden'}>驳回原因（对方可见）<textarea id="admin-user-creator-note" maxlength="200" placeholder="请填写未通过原因">${escape(note)}</textarea></label>
+    ${readOnly?'':`<label class="field" id="admin-user-disabled-reason-wrap" ${user.disabledAt?'hidden':''}>停用原因（可选，账号本人不可见）<input id="admin-user-disabled-reason" maxlength="200" value="${escape(user.disabledReason||'')}" placeholder="例如：多次发布违规内容"></label>`}
+    <p id="admin-user-error" class="auth-error" role="alert" hidden></p>
+    <div class="mini-form-actions admin-user-actions">
+      ${readOnly?'':`<button type="button" class="button soft" id="admin-user-toggle" ${envLocked||self?'disabled':''}>${user.disabledAt?'启用账号':'停用账号'}</button>`}
+      ${readOnly||envLocked||self?'':`<button type="button" class="button danger" id="admin-user-delete">注销账号</button>`}
+      <button type="button" class="button soft" data-close="admin-user">取消</button>
+      <button type="submit" class="button dark" ${readOnly?'disabled':''}>保存修改</button>
+    </div>
+  </form>`;
+  decorate(dialog);
+  const error=$('#admin-user-error');
+  let busy=false;
+  const showError=message=>{error.textContent=message;error.hidden=false;};
+  const submit=async(options,message)=>{
+    if(busy)return;
+    busy=true;error.hidden=true;
+    const controls=[...dialog.querySelectorAll('button,input,select,textarea')].map(element=>({element,disabled:element.disabled}));
+    controls.forEach(({element})=>{element.disabled=true;});
+    try{
+      await requestJson('/api/admin/users/'+encodeURIComponent(user.id),options);
+      dialog.close();toast(message);
+      if(options.method==='DELETE'){
+        state.works=[];state.userWorks=[];galleryKey='';
+        await loadWorks();
+      }
+      await refreshAdminUsers();
+    }catch(err){
+      if(await handleAdminAuthFailure(err)){dialog.close();return;}
+      showError(err.message||'账号操作失败，请重试。');
+      controls.forEach(({element,disabled})=>{element.disabled=disabled;});
+      busy=false;
+    }
+  };
+  const creator=$('#admin-user-creator');
+  creator?.addEventListener('change',()=>{$('#admin-user-note-wrap').hidden=creator.value!=='rejected';});
+  $('#admin-user-form').addEventListener('submit',event=>{
+    event.preventDefault();
+    const body={},role=$('#admin-user-role')?.value,creatorValue=creator?.value;
+    if(!readOnly&&!envLocked&&!self&&role&&role!==user.role)body.role=role;
+    if(!readOnly&&creatorValue&&creatorValue!=='pending'){
+      const creatorNote=$('#admin-user-creator-note')?.value.trim()||'';
+      if(creatorValue!==user.creatorStatus||(creatorValue==='rejected'&&creatorNote!==(user.creatorNote||''))){
+        body.creatorStatus=creatorValue;
+        if(creatorValue==='rejected')body.creatorNote=creatorNote;
+      }
+    }
+    if(!Object.keys(body).length){showError('没有需要保存的修改。');return;}
+    submit({method:'PATCH',body},'账号信息已更新');
+  });
+  $('#admin-user-toggle')?.addEventListener('click',async()=>{
+    if(user.disabledAt){
+      submit({method:'PATCH',body:{disabled:false}},'账号已启用');
+      return;
+    }
+    const reason=$('#admin-user-disabled-reason')?.value.trim()||'';
+    const confirmed=await confirmDelete({title:'停用该账号？',description:`停用后 ${user.nickname} 的现有会话会立即失效，且无法登录；作品不会被删除。`,label:'停用账号'});
+    if(confirmed)submit({method:'PATCH',body:{disabled:true,disabledReason:reason}},'账号已停用，现有会话已失效');
+  });
+  $('#admin-user-delete')?.addEventListener('click',async()=>{
+    const confirmed=await confirmDelete({
+      title:'注销该账号？',
+      description:`账号会匿名化为“已注销用户”，原邮箱可重新注册；作品和媒体会保留，旧会话与验证码立即失效。`,
+      label:'确认注销',
+      confirmText:user.email
+    });
+    if(confirmed)submit({method:'DELETE',body:{confirmEmail:user.email}},'账号已注销，作品归属已匿名化');
+  });
+  dialog.showModal();
 }
 function creatorItem(u){
   const time=u.creatorRequestedAt?new Date(u.creatorRequestedAt).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
   const social=socialLinksHtml(u.social);
   return `<div class="review-item">${avatarHtml(u,44)}<div class="review-info"><strong>${escape(u.nickname)}</strong><span>${escape(u.email)} · ${time} 申请</span>${social?`<div class="review-social">${social}</div>`:'<span class="review-note">未提供社交主页链接</span>'}</div><div class="review-actions"><button class="button soft" data-creator-approve="${escape(u.id)}">${icon('check')}通过</button><button class="button soft" data-creator-reject="${escape(u.id)}">驳回</button></div></div>`;
-}
-function renderReview(){
-  const host=$('#page-view');
-  const creatorSection=state.creatorPending===null
-    ?'<p class="profile-empty">创作者申请加载失败。<button type="button" class="auth-link" data-action="reload-review">重新加载</button></p>'
-    :state.creatorPending.length?`<div class="review-list">${state.creatorPending.map(creatorItem).join('')}</div>`:'<p class="profile-empty">暂无创作者申请。</p>';
-  host.innerHTML=`<div class="page-wrap">
-    <button class="page-back" data-action="back-page">← 返回</button>
-    <div class="page-heading"><h2>审核管理</h2><span>${state.creatorPending?.length??0} 项创作者申请 · ${state.reviewTotal??state.reviewPending.length} 件作品待处理</span></div>
-    <section class="card-block"><h3 class="block-title">创作者申请</h3>${creatorSection}</section>
-    <section class="card-block"><h3 class="block-title">待审核作品</h3>${state.reviewPending.length?`<div class="review-list">${state.reviewPending.map(reviewItem).join('')}</div>`:'<p class="profile-empty">所有作品都已处理完毕。</p>'}</section>
-    <section class="card-block"><h3 class="block-title">最近驳回作品</h3>${state.reviewRejected.length?`<div class="review-list">${state.reviewRejected.slice(0,10).map(reviewItem).join('')}</div>`:'<p class="profile-empty">暂无驳回记录。</p>'}</section>
-  </div>`;
-  decorate(host);
 }
 async function creatorDecide(id,decision,note){
   const epoch=sessionEpoch;
@@ -506,12 +776,36 @@ async function creatorDecide(id,decision,note){
     state.creatorPending=state.creatorPending.filter(u=>u.id!==id);
     if(state.user?.id===id)applySession(data.user);
     toast(decision==='approve'?'已通过创作者申请，对方现在可以发布作品':'已驳回创作者申请');
-    if(state.view==='review')openReview();
+    if(state.view==='admin')openAdmin();else if(state.view==='review')openReview();
   }catch(error){toast(error.message||'审核操作失败，请重试。');}
 }
 function reviewItem(p){
   const time=new Date(p.created).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
   return `<div class="review-item"><button class="review-thumb" data-open="${escape(p.id)}" aria-label="预览${escape(p.title)}">${cardMedia(p)}</button><div class="review-info"><strong>${escape(p.title)}</strong><span>${escape(p.author||'佚名')} · ${time} 提交</span>${p.status==='rejected'&&p.reviewNote?`<span class="review-note">原因：${escape(p.reviewNote)}</span>`:''}</div>${p.status==='pending'?`<div class="review-actions"><button class="button soft" data-review-approve="${escape(p.id)}">${icon('check')}通过</button><button class="button soft" data-review-reject="${escape(p.id)}">驳回</button></div>`:''}</div>`;
+}
+function withdrawnAdminItem(p){
+  const withdrawnAt=p.withdrawnAt?new Date(p.withdrawnAt).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+  return `<div class="review-item"><button class="review-thumb" data-open="${escape(p.id)}" aria-label="预览${escape(p.title)}">${cardMedia(p)}</button><div class="review-info"><strong>${escape(p.title)}</strong><span>作者已注销${withdrawnAt?' · '+withdrawnAt+' 下架':''}</span>${p.withdrawnNote?`<span class="review-note">原因：${escape(p.withdrawnNote)}</span>`:''}</div><div class="review-actions"><button class="button soft" data-admin-cleanup-work="${escape(p.id)}">删除作品</button></div></div>`;
+}
+async function cleanupDeletedAuthorWork(id){
+  const work=state.reviewWithdrawn.find(item=>item.id===id);if(!work)return;
+  const confirmed=await confirmDelete({
+    title:'删除该下架作品？',
+    description:'作者已注销，作品将从画廊和列表中移除；附件仍按现有私有媒体规则保留，不会立刻物理删除。',
+    label:'删除作品'
+  });
+  if(!confirmed)return;
+  try{
+    await requestJson('/api/works/'+encodeURIComponent(id),{method:'DELETE',body:{revision:work.revision}});
+    state.reviewWithdrawn=state.reviewWithdrawn.filter(item=>item.id!==id);
+    state.works=state.works.filter(item=>item.id!==id);state.myWorks=state.myWorks.filter(item=>item.id!==id);
+    state.userWorks=state.userWorks.filter(item=>item.id!==id);galleryKey='';
+    toast('已删除该下架作品');
+    await loadWorks();
+    if(state.view==='admin')openAdmin();
+  }catch(error){
+    toast(error.message||'删除作品失败，请刷新后重试。');
+  }
 }
 async function reviewDecide(id,decision,note){
   const epoch=sessionEpoch,item=state.reviewPending.find(p=>p.id===id);
@@ -531,8 +825,8 @@ async function reviewDecide(id,decision,note){
       toast('已驳回该作品，作者修改后可重新提交');
     }
     render();
-    if(state.view==='review')openReview();
-  }catch(error){if(epoch!==sessionEpoch)return;toast(error.message||'审核操作失败，请重试。');if(state.view==='review')openReview();}
+    if(state.view==='admin')openAdmin();else if(state.view==='review')openReview();
+  }catch(error){if(epoch!==sessionEpoch)return;toast(error.message||'审核操作失败，请重试。');if(state.view==='admin')openAdmin();else if(state.view==='review')openReview();}
 }
 function openReject(id,type='work'){
   const isCreator=type==='creator';
@@ -684,13 +978,13 @@ function render() {
   if(focusKey&&!focused.isConnected){const attr=focusKey.replace(/[A-Z]/g,letter=>'-'+letter.toLowerCase());document.querySelector(`[data-${attr}="${CSS.escape(focusValue)}"]`)?.focus({preventScroll:true});}
 }
 function setView(view) {
-  state.view=['explore','collections','recent','creations','drafts','profile','review'].includes(view)?view:'explore';
+  state.view=['explore','collections','recent','creations','drafts','profile','review','admin'].includes(view)?view:'explore';
   renderViewActions();
-  const isPage=['profile','review'].includes(state.view);
+  const isPage=['profile','review','admin'].includes(state.view);
   document.body.classList.toggle('view-secondary',state.view!=='explore');
   document.body.classList.toggle('view-page',isPage);
   $('#page-view').hidden=!isPage;
-  const copy={explore:['发现灵感，<span>即刻开始。</span>','看见喜欢的画面，让它成为你的创作起点。','灵感画廊'],collections:['喜欢的，<span>都在这里。</span>','收藏触动你的画面，也留住属于自己的创意。','我的收藏'],recent:['新鲜灵感，<span>正在更新。</span>','最新上传的图片与视频，按时间倒序排列。','最近更新'],creations:['你的想法，<span>你的作品。</span>','管理发布草稿、审核状态、已发布与下架作品。','我的作品'],drafts:['创作，从<span>一个想法开始。</span>','打磨提示词、整理参考图，在这里开始创作和管理草稿。','创作台'],profile:['你的空间，<span>由此开始。</span>','管理昵称、社交主页与作品审核状态。','个人资料'],review:['作品审核，<span>一目了然。</span>','通过或驳回用户提交的上传作品。','审核管理']}[state.view];
+  const copy={explore:['发现灵感，<span>即刻开始。</span>','看见喜欢的画面，让它成为你的创作起点。','灵感画廊'],collections:['喜欢的，<span>都在这里。</span>','收藏触动你的画面，也留住属于自己的创意。','我的收藏'],recent:['新鲜灵感，<span>正在更新。</span>','最新上传的图片与视频，按时间倒序排列。','最近更新'],creations:['你的想法，<span>你的作品。</span>','管理发布草稿、审核状态、已发布与下架作品。','我的作品'],drafts:['创作，从<span>一个想法开始。</span>','打磨提示词、整理参考图，在这里开始创作和管理草稿。','创作台'],profile:['你的空间，<span>由此开始。</span>','管理昵称、社交主页与作品审核状态。','个人资料'],review:['作品审核，<span>一目了然。</span>','通过或驳回用户提交的上传作品。','审核管理'],admin:['管理后台，<span>一处处理。</span>','管理账号、审核作品与创作者申请，并配置生图服务。','管理后台']}[state.view];
   $('#page-title').innerHTML=copy[0];$('.intro-copy').textContent=copy[1];$('#gallery-title').textContent=copy[2];
   state.query='';state.category='全部灵感';state.type='all';state.model='all';state.workStatus='all';$('#search').value='';
   render();
@@ -727,7 +1021,7 @@ async function openPrompt(id){
     catch(error){if(seq===detailSeq&&epoch===sessionEpoch)toast(error.message||'作品不存在或无权查看。');return;}
   }else if(!p&&sessionPromise){await sessionPromise.catch(()=>{});p=findWork(id);}
   if(!p||seq!==detailSeq||epoch!==sessionEpoch)return;currentPrompt=p;
-  activeMedia=0;if(!location.hash.startsWith('#prompt/'))detailReturnHash=state.view;
+  activeMedia=0;if(!location.hash.startsWith('#prompt/'))detailReturnHash=location.hash.slice(1)||state.view;
   const download=p.media?.[0]?.url||(!p.custom?p.image:null);
   const attribution=p.generated?'创作台生成记录 · 仅当前账号可见':p.uploaded?(p.status==='draft'?'发布草稿 · 仅自己可见':p.status==='pending'?'审核中 · 通过后将公开展示':p.status==='rejected'?`未通过审核${p.reviewNote?'：'+escape(p.reviewNote):''} · 修改后重新提交`:'已发布作品 · 文件保存在当前网站'):p.custom?'个人提示词草稿 · 保存在当前浏览器'+(draftPreview(p,allPrompts().concat(state.myWorks))?' · 来源/参考图片预览':''):p.type==='video'?'静态分镜参考 · 非生成视频':'视觉参考照片 · 非此提示词的实测生成结果';
   const authorName=p.authorId?`<button class="detail-author-name" data-author="${escape(p.authorId)}" title="访问${escape(p.author||'创作者')}的主页">${escape(p.author||'创作者')}</button>`:escape(p.author||(p.custom?'我的作品':'Luma Studio'));
@@ -874,6 +1168,8 @@ document.addEventListener('click',event=>{
   const button=event.target.closest('button,a');if(!button)return;
   if(button.dataset.view)go(button.dataset.view);
   if(button.dataset.author){const target='#user/'+button.dataset.author;document.querySelectorAll('.account-menu[open]').forEach(menu=>menu.open=false);if($('#detail').open)$('#detail').close();if(location.hash===target)openUserPage(button.dataset.author);else location.hash=target;}
+  if(button.dataset.adminTab)goAdmin(button.dataset.adminTab);
+  if(button.dataset.adminUser)openAdminUser(button.dataset.adminUser);
   if(button.hasAttribute('data-review-approve'))reviewDecide(button.getAttribute('data-review-approve'),'approve');
   if(button.hasAttribute('data-review-reject'))openReject(button.getAttribute('data-review-reject'));
   if(button.hasAttribute('data-creator-approve'))creatorDecide(button.getAttribute('data-creator-approve'),'approve');
@@ -896,6 +1192,7 @@ document.addEventListener('click',event=>{
   if(button.dataset.workEdit){const p=findWork(button.dataset.workEdit);if(p)openPublisher(p);}
   if(button.dataset.workDelete){const p=findWork(button.dataset.workDelete);if(p)removeWorkById(p);}
   if(button.dataset.workWithdraw){const p=findWork(button.dataset.workWithdraw);if(p)withdrawWork(p);}
+  if(button.dataset.adminCleanupWork)cleanupDeletedAuthorWork(button.dataset.adminCleanupWork);
   if(button.dataset.open)openPrompt(button.dataset.open);
   if(button.dataset.save)toggleSave(button.dataset.save);
   if(button.hasAttribute('data-detail-save')&&currentPrompt)toggleSave(currentPrompt.id);
@@ -916,7 +1213,11 @@ document.addEventListener('click',event=>{
     case 'logout':logout();break;
     case 'open-profile':go('profile');break;
     case 'open-my-page':if(state.user){const target='#user/'+state.user.id;if(location.hash===target)openUserPage(state.user.id);else location.hash=target;}break;
-    case 'open-review':go('review');break;
+    case 'open-admin':goAdmin('users');break;
+    case 'open-review':goAdmin('works');break;
+    case 'admin-user-reset':state.adminUserFilters={q:'',role:'all',status:'all',creatorStatus:'all',kind:'all',page:1};refreshAdminUsers();break;
+    case 'admin-users-prev':if(state.adminUserFilters.page>1){state.adminUserFilters.page--;refreshAdminUsers();}break;
+    case 'admin-users-next':if(state.adminUserFilters.page<state.adminUserPages){state.adminUserFilters.page++;refreshAdminUsers();}break;
     case 'generation-settings':generationUI.openSettings();break;
     case 'edit-nickname':openNickname();break;
     case 'change-password':openPassword();break;
@@ -930,7 +1231,7 @@ document.addEventListener('click',event=>{
     case 'search':document.body.classList.add('search-visible');$('#search').focus();$('#search').scrollIntoView({block:'center',behavior:'smooth'});break;
     case 'clear-filters':clearFilters();break;
     case 'reload-works':loadWorks();break;
-    case 'reload-review':openReview();break;
+    case 'reload-review':if(state.view==='admin')openAdmin();else openReview();break;
     case 'media-prev':showMedia(activeMedia-1);break;
     case 'media-next':showMedia(activeMedia+1);break;
     case 'about':$('#about').showModal();break;
@@ -949,12 +1250,32 @@ document.addEventListener('click',event=>{
 let searchTimer;
 $('#search').addEventListener('input',event=>{state.query=event.target.value;clearTimeout(searchTimer);searchTimer=setTimeout(render,180);});
 document.addEventListener('keydown',event=>{if(event.key==='/'&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)&&!document.querySelector('dialog[open]')){event.preventDefault();document.body.classList.add('search-visible');$('#search').focus();}});
+document.addEventListener('keydown',event=>{
+  const tab=event.target instanceof Element?event.target.closest('[data-admin-tab]'):null;
+  if(!tab||!['ArrowLeft','ArrowRight'].includes(event.key))return;
+  const tabs=[...document.querySelectorAll('[data-admin-tab]')],index=tabs.indexOf(tab);
+  if(index<0)return;
+  const next=tabs[(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length];
+  event.preventDefault();next.focus();goAdmin(next.dataset.adminTab);
+});
 document.querySelectorAll('dialog').forEach(dialog=>dialog.addEventListener('click',event=>{if(event.target===dialog&&!(dialog.id==='editor'&&publishing)&&!(dialog.id==='auth'&&authDialog.busy)){const r=dialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)dialog.close();}}));
 function route(){
   const hash=location.hash.slice(1);
   if(hash.startsWith('prompt/')){let id;try{id=decodeURIComponent(hash.slice(7));}catch{return;}if(currentPrompt?.id!==id||!$('#detail').open)openPrompt(id);return;}
   if(hash.startsWith('user/')){const id=hash.slice(5);if(/^user-[0-9a-f-]{36}$/.test(id)){if(state.view!=='user'||state.userViewId!==id)openUserPage(id);return;}}
   if($('#detail').open)$('#detail').close();
+  if(hash==='review'){
+    history.replaceState(null,'','#admin/works');state.adminTab='works';
+    if(state.view!=='admin')setView('admin');else openAdmin();
+    return;
+  }
+  const adminMatch=/^admin(?:\/(users|works|creators|generation))?$/.exec(hash);
+  if(adminMatch){
+    const tab=adminMatch[1]||'users';
+    if(state.view!=='admin'){state.adminTab=tab;setView('admin');}
+    else if(state.adminTab!==tab){state.adminTab=tab;openAdmin();}
+    return;
+  }
   const view=['explore','collections','recent','creations','drafts','profile','review'].includes(hash)?hash:'explore';
   if(state.view!==view)setView(view);
   else if(view==='profile'||view==='review')renderPageView();
@@ -964,8 +1285,12 @@ const categoryDisclosure=$('.sidebar-categories'),mobileCategories=matchMedia('(
 $('.filter-row').appendChild($('.media-tabs'));
 decorate();
 sessionPromise=loadSession();
-setView(location.hash.startsWith('#prompt/')?'explore':location.hash.slice(1)||'explore');
-if(location.hash.startsWith('#prompt/')||location.hash.startsWith('#user/'))route();
+const initialHash=location.hash.slice(1),initialAdmin=/^admin(?:\/(users|works|creators|generation))?$/.exec(initialHash);
+if(initialAdmin)state.adminTab=initialAdmin[1]||'users';
+if(initialHash==='review')state.adminTab='works';
+const initialView=location.hash.startsWith('#prompt/')?'explore':(initialAdmin||initialHash==='review'?'admin':initialHash||'explore');
+setView(initialView);
+if(location.hash.startsWith('#prompt/')||location.hash.startsWith('#user/')||initialAdmin||initialHash==='review')route();
 if(storageIssue)toast('部分本地数据无法读取；你仍可浏览和导出提示词。');
 
 $('#detail').addEventListener('close',()=>{if($('#detail').open)return;detailSeq++;$('#detail').querySelectorAll('video').forEach(video=>{video.pause();video.removeAttribute('src');video.load();});$('#detail').innerHTML='';currentPrompt=null;if(location.hash.startsWith('#prompt/'))history.replaceState(null,'','#'+detailReturnHash);});
@@ -990,14 +1315,22 @@ async function removeWorkById(work){
     toast('已删除作品，可撤销');$('#toast').insertAdjacentHTML('beforeend',' <button class="undo-button" data-action="undo-remove">撤销</button>');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),15000);
   }catch(error){toast(error.message||'移除失败，请重试。');}
 }
-function confirmDelete({title,description,label}){
+function confirmDelete({title,description,label,confirmText}){
   const dialog=$('#confirm');
   if(dialog.open)return Promise.resolve(false);
-  dialog.innerHTML=`<form class="mini-form"><button type="button" class="icon-button close" data-close="confirm" aria-label="关闭">${icon('x')}</button><p class="eyebrow">PLEASE CONFIRM</p><h2 id="confirm-title">${escape(title)}</h2><p class="confirm-copy">${escape(description)}</p><div class="mini-form-actions"><button type="button" class="button soft" data-close="confirm">取消</button><button type="submit" class="button dark">${escape(label)}</button></div></form>`;
+  const requirement=confirmText?`<label class="field">输入 <strong>${escape(confirmText)}</strong> 确认<input id="confirm-text" autocomplete="off" value=""></label><p id="confirm-error" class="auth-error" role="alert" hidden></p>`:'';
+  dialog.innerHTML=`<form class="mini-form"><button type="button" class="icon-button close" data-close="confirm" aria-label="关闭">${icon('x')}</button><p class="eyebrow">PLEASE CONFIRM</p><h2 id="confirm-title">${escape(title)}</h2><p class="confirm-copy">${escape(description)}</p>${requirement}<div class="mini-form-actions"><button type="button" class="button soft" data-close="confirm">取消</button><button type="submit" class="button dark">${escape(label)}</button></div></form>`;
   return new Promise(resolve=>{
     let settled=false;
     const finish=value=>{if(settled)return;settled=true;if(dialog.open)dialog.close();resolve(value);};
-    dialog.querySelector('form').addEventListener('submit',event=>{event.preventDefault();finish(true);});
+    dialog.querySelector('form').addEventListener('submit',event=>{
+      event.preventDefault();
+      if(confirmText){
+        const input=$('#confirm-text'),error=$('#confirm-error');
+        if(input.value.trim()!==confirmText){error.textContent='请输入完整账号邮箱确认。';error.hidden=false;input.focus();return;}
+      }
+      finish(true);
+    });
     dialog.addEventListener('close',()=>finish(false),{once:true});
     dialog.showModal();
   });

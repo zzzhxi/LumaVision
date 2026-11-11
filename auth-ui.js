@@ -1,13 +1,28 @@
+import { REGISTRATION_EMAIL_DOMAINS, DEFAULT_REGISTRATION_EMAIL_DOMAIN, emailDomain } from './email-domains.js';
+
 // Verification codes, passwords, and onboarding inputs exist only while this dialog is open.
 export function createAuthDialog({ dialog, request, emailMode, onVerified, onAuthenticated, onDismiss, platforms, escape, icon }) {
   let step = 'login', busy = false, completed = false, challenge = null, captcha = null, authenticatedUser = null, timer = null, notice = '';
   let draft;
   const resetDraft = () => {
-    draft = { email: '', code: '', password: '', confirm: '', captcha: '', nickname: '', role: 'personal', social: {}, platform: 'instagram', url: '' };
+    draft = { email: '', emailPrefix: '', emailDomain: DEFAULT_REGISTRATION_EMAIL_DOMAIN, code: '', password: '', confirm: '', captcha: '', nickname: '', role: 'personal', social: {}, platform: 'instagram', url: '' };
   };
   resetDraft();
   const find = selector => dialog.querySelector(selector);
   const emailPattern = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/;
+  const registrationEmail = () => {
+    const prefix = draft.emailPrefix.trim();
+    return prefix ? `${prefix}@${draft.emailDomain}` : '';
+  };
+  const seedRegistrationEmail = () => {
+    const email = draft.email.trim();
+    const at = email.lastIndexOf('@');
+    if (at <= 0) return;
+    const domain = emailDomain(email);
+    if (!REGISTRATION_EMAIL_DOMAINS.some(item => item.value === domain)) return;
+    draft.emailPrefix = email.slice(0, at);
+    draft.emailDomain = domain;
+  };
   const passwordProblem = value => {
     if (value.length < 8 || value.length > 64) return '密码需为 8-64 个字符。';
     if (!/[A-Za-z]/.test(value) || !/\d/.test(value)) return '密码需同时包含字母和数字。';
@@ -17,6 +32,11 @@ export function createAuthDialog({ dialog, request, emailMode, onVerified, onAut
   function remember() {
     for (const [key, id] of [['email', 'auth-email'], ['code', 'auth-code'], ['password', 'auth-password'], ['confirm', 'auth-confirm'], ['captcha', 'auth-captcha'], ['nickname', 'auth-nickname'], ['platform', 'creator-platform'], ['url', 'creator-url']]) {
       if (find(`#${id}`)) draft[key] = find(`#${id}`).value;
+    }
+    if (find('#auth-email-prefix') && find('#auth-email-domain')) {
+      draft.emailPrefix = find('#auth-email-prefix').value;
+      draft.emailDomain = find('#auth-email-domain').value;
+      draft.email = registrationEmail();
     }
     const role = find('[name="auth-role"]:checked');
     if (role) draft.role = role.value;
@@ -51,6 +71,10 @@ export function createAuthDialog({ dialog, request, emailMode, onVerified, onAut
   function emailField() {
     return `<div class="auth-field"><label for="auth-email">邮箱地址</label><input id="auth-email" type="email" maxlength="120" placeholder="you@example.com" autocomplete="email" inputmode="email" autocapitalize="none" spellcheck="false" value="${escape(draft.email)}" aria-describedby="auth-error" required></div>`;
   }
+  function registrationEmailField() {
+    const options = REGISTRATION_EMAIL_DOMAINS.map(({ value }) => `<option value="${escape(value)}" ${draft.emailDomain === value ? 'selected' : ''}>@${escape(value)}</option>`).join('');
+    return `<div class="auth-field"><label for="auth-email-prefix">邮箱前缀</label><div class="auth-email-compose"><input id="auth-email-prefix" type="text" maxlength="64" placeholder="邮箱前缀" autocomplete="username" inputmode="email" autocapitalize="none" spellcheck="false" value="${escape(draft.emailPrefix)}" aria-describedby="auth-error" required><span class="auth-email-at" aria-hidden="true">@</span><select id="auth-email-domain" aria-label="邮箱后缀">${options}</select></div><p class="auth-hint">仅支持 163、QQ、Gmail、Outlook、126、Hotmail 常见个人邮箱。</p></div>`;
+  }
   function passwordField(id, label, autocomplete, hint = '') {
     return `<div class="auth-field"><label for="${id}">${label}</label><input id="${id}" type="password" maxlength="64" autocomplete="${autocomplete}" placeholder="至少 8 位，包含字母和数字" value="${escape(id === 'auth-password' ? draft.password : draft.confirm)}" aria-describedby="auth-error" required>${hint ? `<p class="auth-hint">${hint}</p>` : ''}</div>`;
   }
@@ -68,7 +92,7 @@ export function createAuthDialog({ dialog, request, emailMode, onVerified, onAut
       return `${emailField()}<div class="auth-field"><div class="auth-field-head"><label for="auth-password">密码</label><button type="button" class="auth-link" data-auth-step="reset">忘记密码？</button></div><input id="auth-password" type="password" maxlength="64" autocomplete="current-password" placeholder="输入登录密码" value="${escape(draft.password)}" aria-describedby="auth-error" required></div><p class="auth-switch">还没有账号？<button type="button" class="auth-link" data-auth-step="register">注册</button></p><p class="auth-hint">旧账号首次登录，请先使用“忘记密码”设置密码。</p>`;
     }
     if (step === 'register') {
-      return `${emailField()}<p class="auth-hint">验证码会发送到该邮箱，用于确认你是账号所有者。</p><p class="auth-switch">已有账号？<button type="button" class="auth-link" data-auth-step="login">返回登录</button></p>`;
+      return `${registrationEmailField()}<p class="auth-hint">验证码会发送到该邮箱，用于确认你是账号所有者。</p><p class="auth-switch">已有账号？<button type="button" class="auth-link" data-auth-step="login">返回登录</button></p>`;
     }
     if (step === 'register-verify') {
       return `<div class="auth-email-summary"><span>${escape(challenge.email)}</span><button type="button" class="auth-link" data-auth-step="register">更换邮箱</button></div>${codeField()}${demoCode()}${passwordField('auth-password', '登录密码', 'new-password', '8-64 个字符，需同时包含字母和数字。')}${passwordField('auth-confirm', '确认密码', 'new-password')}${captchaFields()}`;
@@ -100,7 +124,7 @@ export function createAuthDialog({ dialog, request, emailMode, onVerified, onAut
     find('#auth-form').addEventListener('submit', submit);
     dialog.querySelectorAll('input').forEach(input => input.addEventListener('input', () => input.removeAttribute('aria-invalid')));
     if (step === 'register-verify' || step === 'reset-verify') { updateCountdown(); timer = setInterval(updateCountdown, 1000); }
-    const focusTarget = step === 'login' ? (draft.email ? '#auth-password' : '#auth-email') : step === 'setup' ? '#auth-nickname' : step === 'register' || step === 'reset' ? '#auth-email' : '#auth-code';
+    const focusTarget = step === 'login' ? (draft.email ? '#auth-password' : '#auth-email') : step === 'setup' ? '#auth-nickname' : step === 'register' ? '#auth-email-prefix' : step === 'reset' ? '#auth-email' : '#auth-code';
     find(focusTarget).focus();
   }
 
@@ -129,13 +153,13 @@ export function createAuthDialog({ dialog, request, emailMode, onVerified, onAut
   }
 
   async function sendCode(purpose) {
-    const email = draft.email.trim();
+    const email = (step === 'register-verify' || step === 'reset-verify') && challenge?.email ? challenge.email : draft.email.trim();
     setBusy(true, '正在发送验证码…');
     let data;
     try {
       data = await request(purpose === 'reset' ? '/api/auth/password/reset/code' : '/api/auth/code', { method: 'POST', body: { email } });
     } catch (error) {
-      showError(error.message, find('#auth-email'));
+      showError(error.message, find('#auth-email-prefix') || find('#auth-email'));
     }
     setBusy(false, '获取验证码');
     if (!data) return;
@@ -182,9 +206,19 @@ export function createAuthDialog({ dialog, request, emailMode, onVerified, onAut
       completeAuth(data.user, false);
       return;
     }
-    if (step === 'register' || step === 'reset') {
+    if (step === 'register') {
+      const prefix = draft.emailPrefix.trim();
+      if (!/^[^\s@]{1,64}$/.test(prefix)) { showError('请输入有效的邮箱前缀。', find('#auth-email-prefix')); return; }
+      if (!REGISTRATION_EMAIL_DOMAINS.some(item => item.value === draft.emailDomain)) { showError('请选择支持的邮箱后缀。', find('#auth-email-domain')); return; }
+      draft.emailPrefix = prefix;
+      draft.email = registrationEmail();
+      if (!emailPattern.test(draft.email)) { showError('请输入有效的邮箱地址。', find('#auth-email-prefix')); return; }
+      await sendCode('register');
+      return;
+    }
+    if (step === 'reset') {
       if (!emailPattern.test(draft.email.trim())) { showError('请输入有效的邮箱地址。', find('#auth-email')); return; }
-      await sendCode(step);
+      await sendCode('reset');
       return;
     }
     if (step === 'register-verify') {
@@ -200,7 +234,7 @@ export function createAuthDialog({ dialog, request, emailMode, onVerified, onAut
         data = await request('/api/auth/register', { method: 'POST', body: { email: challenge.email, code: draft.code.trim(), challengeId: challenge.challengeId, password: draft.password, captchaId: captcha.challengeId, captcha: draft.captcha.trim() } });
       } catch (error) {
         setBusy(false, '注册');
-        showError(error.message, find('#auth-captcha'));
+        showError(error.message, error.message.includes('注册仅支持') ? find('[data-auth-step="register"]') : find('#auth-captcha'));
         draft.captcha = '';
         if (find('#auth-captcha')) find('#auth-captcha').value = '';
         await loadCaptcha();
@@ -265,7 +299,9 @@ export function createAuthDialog({ dialog, request, emailMode, onVerified, onAut
       challenge = null;
       captcha = null;
       notice = '';
-      step = button.dataset.authStep;
+      const next = button.dataset.authStep;
+      if (next === 'register') seedRegistrationEmail();
+      step = next;
       render();
       return;
     }

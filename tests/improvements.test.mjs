@@ -107,7 +107,7 @@ test('stable filtered pagination has no duplicates or omissions and refuses chan
 test('slow/failing mail does not block profile/session writes; reservation prevents resend and preserves old codes',async t=>{
   const dir=await mkdtemp(join(tmpdir(),'lumavision-mail-'));t.after(()=>rm(dir,{recursive:true,force:true}));
   let release,entered,mode='fast',code;
-  const auth=createAuthStore(dir,{sendCode:async input=>{code=input.code;if(mode==='slow'){entered();await new Promise(resolve=>release=resolve);}if(mode==='fail')throw Error('mail failed');return {delivery:'email'};}});
+  const auth=createAuthStore(dir,{sendCode:async input=>{code=input.code;if(mode==='slow'){entered();await new Promise(resolve=>release=resolve);}if(mode==='fail')throw Error('mail failed');return {delivery:'email'};},registrationEmailDomains:null});
   const user=await auth.upsertByEmail('user@test.dev'),now=Date.now(),old=await auth.requestCode(user.email,{purpose:'password'},now),oldCode=code;
   mode='slow';const started=new Promise(resolve=>entered=resolve),sending=auth.requestCode('slow@test.dev',now);await started;
   const update=await Promise.race([auth.updateProfile(user.id,{nickname:'updated'}),new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error('mail blocks writes')),1000);timer.unref();})]);assert.equal(update.nickname,'updated');

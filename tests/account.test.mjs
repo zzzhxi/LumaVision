@@ -6,16 +6,17 @@ import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { createApp } from '../server.mjs';
 import { renderCaptcha, CAPTCHA_ALPHABET } from '../captcha.mjs';
+import { REGISTRATION_EMAIL_DOMAINS } from '../email-domains.js';
 
 const parent=resolve('test-results');
 await mkdir(parent,{recursive:true});
 const picture=await readFile(new URL('../assets/aurora.jpg',import.meta.url));
 const CAPTCHA='ABC234',PASSWORD='Pass1234';
 
-async function setup(t){
+async function setup(t,registrationEmailDomains=null){
   const dir=await mkdtemp(join(parent,'account-test-'));
   const codes=new Map();
-  const options={storageRoot:dir,sendAuthCode:async({email,code,purpose})=>{codes.set(email,code);codes.set(`${purpose}:${email}`,code);return {delivery:'email'};},captchaFactory:()=>({text:CAPTCHA,image:Buffer.from('captcha')})};
+  const options={storageRoot:dir,sendAuthCode:async({email,code,purpose})=>{codes.set(email,code);codes.set(`${purpose}:${email}`,code);return {delivery:'email'};},captchaFactory:()=>({text:CAPTCHA,image:Buffer.from('captcha')}),registrationEmailDomains};
   let app=await createApp(options);app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
   const url=()=>`http://127.0.0.1:${app.server.address().port}`;
   t.after(async()=>{await new Promise(resolve=>app.server.close(resolve));const target=resolve(dir);assert.ok(target.startsWith(parent+sep)&&target.includes('account-test-'));await rm(target,{recursive:true,force:true});});
@@ -65,6 +66,41 @@ test('图形验证码字符表全部可绘制并输出 PNG',()=>{
   assert.ok(png.length>1000);
   assert.equal(new Set(CAPTCHA_ALPHABET).size,CAPTCHA_ALPHABET.length);
   for(const ambiguous of ['0','1','I','O'])assert.equal(CAPTCHA_ALPHABET.includes(ambiguous),false);
+});
+
+test('注册仅接受六个常见邮箱域名，旧账号登录和重置不受影响',async t=>{
+  const domains=REGISTRATION_EMAIL_DOMAINS.map(item=>item.value),env=await setup(t,domains);
+  const blocked='blocked@test.dev';
+  let response=await json(env,'/api/auth/code',{method:'POST',body:{email:blocked}});
+  assert.equal(response.status,400);
+  assert.match(response.body.error,/注册仅支持/);
+  assert.equal(env.codes.has(`register:${blocked}`),false);
+
+  for(const domain of domains){
+    const result=await register(env,`allowed-${domain.replace(/\./g,'-')}@${domain}`);
+    assert.equal(result.status,200,`${domain}: ${JSON.stringify(result.body)}`);
+  }
+
+  const bypassEmail=`bypass-${randomUUID().slice(0,8)}@qq.com`,rejectedEmail=`bypass-${randomUUID().slice(0,8)}@test.dev`;
+  const challenge=await json(env,'/api/auth/code',{method:'POST',body:{email:bypassEmail}});
+  assert.equal(challenge.status,200);
+  const captcha=await json(env,'/api/auth/captcha');
+  const body={email:rejectedEmail,code:env.codes.get(`register:${bypassEmail}`),challengeId:challenge.body.challengeId,password:PASSWORD,captchaId:captcha.body.challengeId,captcha:env.captcha};
+  response=await json(env,'/api/auth/register',{method:'POST',body});
+  assert.equal(response.status,400);
+  body.email=bypassEmail;
+  response=await json(env,'/api/auth/register',{method:'POST',body});
+  assert.equal(response.status,200);
+
+  const legacyEmail=`legacy-${randomUUID().slice(0,8)}@test.dev`;
+  await env.auth.upsertByEmail(legacyEmail);
+  const reset=await json(env,'/api/auth/password/reset/code',{method:'POST',body:{email:legacyEmail}});
+  assert.equal(reset.status,200);
+  response=await json(env,'/api/auth/password/reset',{method:'POST',body:{email:legacyEmail,code:env.codes.get(`reset:${legacyEmail}`),challengeId:reset.body.challengeId,password:'Newpass123'}});
+  assert.equal(response.status,200);
+  response=await json(env,'/api/auth/login',{method:'POST',body:{email:legacyEmail,password:'Newpass123'}});
+  assert.equal(response.status,200);
+  assert.equal(response.body.user.email,legacyEmail);
 });
 
 test('作品作者资料使用最新公开社交主页，不泄露申请材料或账号隐私，不写入作品存储',async t=>{

@@ -44,7 +44,7 @@ test('发信失败不创建账号、不使旧验证码失效；发送限流在�
   const dir = await mkdtemp(join(parent, 'email-test-'));
   t.after(async () => { const target = resolve(dir); assert.ok(target.startsWith(parent + sep) && target.includes('email-test-')); await rm(target, { recursive: true, force: true }); });
   let fail = true, sent;
-  const options = { sendCode: async input => { if (fail) throw new HttpError(502, '发送失败'); sent = input.code; return { delivery: 'email' }; }, captchaFactory: () => ({ text: 'ABC234', image: Buffer.from('captcha') }) };
+  const options = { sendCode: async input => { if (fail) throw new HttpError(502, '发送失败'); sent = input.code; return { delivery: 'email' }; }, captchaFactory: () => ({ text: 'ABC234', image: Buffer.from('captcha') }), registrationEmailDomains: null };
   let auth = createAuthStore(dir, options);
   const now = Date.now();
   await assert.rejects(auth.requestCode('member@test.dev', now), { status: 502 });

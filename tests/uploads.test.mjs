@@ -15,7 +15,7 @@ function metadata(overrides={}){return {id:`work-${randomUUID()}`,requestId:rand
 async function setup(t){
   const dir=await mkdtemp(join(parent,'uploads-test-'));
   const codes=new Map();
-  const options={storageRoot:dir,sendAuthCode:async({email,code,purpose})=>{codes.set(email,code);codes.set(`${purpose}:${email}`,code);return {delivery:'email'};},captchaFactory:()=>({text:CAPTCHA,image:Buffer.from('captcha')})};
+  const options={storageRoot:dir,sendAuthCode:async({email,code,purpose})=>{codes.set(email,code);codes.set(`${purpose}:${email}`,code);return {delivery:'email'};},captchaFactory:()=>({text:CAPTCHA,image:Buffer.from('captcha')}),registrationEmailDomains:null};
   let app=await createApp(options);app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
   const url=()=>`http://127.0.0.1:${app.server.address().port}`;
   t.after(async()=>{await new Promise(resolve=>app.server.close(resolve));const target=resolve(dir);assert.ok(target.startsWith(parent+sep)&&target.includes('uploads-test-'));await rm(target,{recursive:true,force:true});});

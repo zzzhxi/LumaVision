@@ -27,7 +27,7 @@ export function queryWorks(works, params) {
 }
 
 export function workCard(work) {
-  const fields=['id','title','subtitle','model','category','ratio','type','status','revision','authorId','author','created','updated','likes','tags','color','custom','uploaded','generated','generationId','reviewNote','withdrawnNote'];
+  const fields=['id','title','subtitle','model','category','ratio','type','status','revision','authorId','author','created','updated','likes','tags','color','custom','uploaded','generated','generationId','reviewNote','withdrawnNote','withdrawnAt'];
   const card=Object.fromEntries(fields.map(key=>[key,work[key]]));
   return {...card,cardOnly:true,media:work.media.slice(0,1),mediaCount:work.media.length,mediaTypes:[...new Set(work.media.map(media=>media.type))]};
 }

@@ -13,7 +13,7 @@
   <header class="topbar"><div class="nav-wrap">
     <a class="brand" href="#explore" aria-label="LumaVision 首页"><svg viewBox="0 0 40 40" aria-hidden="true"><ellipse cx="20" cy="20" rx="9" ry="16" transform="rotate(-35 20 20)"/><ellipse cx="20" cy="20" rx="9" ry="16" transform="rotate(35 20 20)"/></svg><span>LumaVision<span class="brand-dot">.</span></span></a>
     <p class="brand-caption">你的视觉灵感工作室</p>
-    <nav aria-label="主导航"><button class="nav-link active" data-view="explore"><span data-icon="home"></span>探索灵感</button><button class="nav-link" data-action="search"><span data-icon="search"></span>搜索提示词 <kbd>/</kbd></button><button class="nav-link" data-view="collections"><span data-icon="bookmark"></span>我的收藏 <span id="saved-count"></span></button><button class="nav-link" data-view="recent"><span data-icon="update"></span>最近更新</button><button class="nav-link" data-view="creations"><span data-icon="image"></span>我的作品</button><button class="nav-link" data-view="review" hidden><span data-icon="check"></span>审核管理</button></nav>
+    <nav aria-label="主导航"><button class="nav-link active" data-view="explore"><span data-icon="home"></span>探索灵感</button><button class="nav-link" data-action="search"><span data-icon="search"></span>搜索提示词 <kbd>/</kbd></button><button class="nav-link" data-view="collections"><span data-icon="bookmark"></span>我的收藏 <span id="saved-count"></span></button><button class="nav-link" data-view="recent"><span data-icon="update"></span>最近更新</button><button class="nav-link" data-view="creations"><span data-icon="image"></span>我的作品</button><button class="nav-link" data-view="admin" hidden><span data-icon="sliders"></span>管理后台</button></nav>
     <div class="creation-nav"><button class="nav-link" data-view="drafts"><span data-icon="sparkles"></span>创作台</button></div>
     <details class="sidebar-categories"><summary class="sidebar-label">风格分类 <span>⌄</span></summary><div class="category-list" role="group" aria-label="风格分类"></div></details>
     <div class="sidebar-bottom"><div class="sidebar-tip"><span data-icon="sparkles"></span><strong>让灵感接着发生</strong><p>找到喜欢的画面，套用提示词，<br>再加入你的想法。</p></div>
@@ -42,6 +42,7 @@
   <dialog id="password" class="mini-dialog" aria-labelledby="password-title"></dialog>
   <dialog id="generation-settings" aria-labelledby="generation-settings-title"></dialog>
   <dialog id="reject" class="reject-dialog" aria-labelledby="reject-title"></dialog>
+  <dialog id="admin-user" class="admin-user-dialog" aria-labelledby="admin-user-title"></dialog>
  <dialog id="confirm" class="mini-dialog" aria-labelledby="confirm-title"></dialog>
   <dialog id="about" class="about-dialog" aria-labelledby="about-title"><button class="icon-button close" data-close="about" aria-label="关闭"><span data-icon="x"></span></button><p class="eyebrow">ABOUT LUMAVISION</p><h2 id="about-title">灵感，是创作的开始。</h2><p>一个用于发现、收藏与打磨图片和视频提示词的个人空间。</p><p>画廊采用原创示例提示词与 Unsplash 参考照片。照片用于表达视觉方向，并非对应提示词的模型生成结果；视频条目使用静态分镜参考。</p><p>上传作品的提示词、图片和视频保存在当前网站，可编辑并展示多张图片。收藏和未发布的文本草稿保存在当前浏览器；图片生成由管理员配置服务后使用，生成记录仅当前账号可见；视频生成暂未接入。</p><a href="https://www.meigen.ai/" target="_blank" rel="noreferrer">浏览流程参考 MeiGen ↗</a></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

@@ -70,10 +70,28 @@ export function createStore(directory){
       const works=await all();
       return works.filter(work=>work&&!work.deletedAt&&(work.status||'published')===status).sort((a,b)=>b.created-a.created);
     },
-    async review(id,{decision,note,expectedRevision}={}){
+    async statsByAuthor(){
+      await ready;
+      const stats=new Map();
+      for(const work of await all()){
+        if(!work?.authorId)continue;
+        const item=stats.get(work.authorId)||{total:0,published:0,pending:0,draft:0,rejected:0,withdrawn:0,deleted:0};
+        if(work.deletedAt)item.deleted++;
+        else{
+          item.total++;
+          const status=work.status||'published';
+          if(['published','pending','draft','rejected','withdrawn'].includes(status))item[status]++;
+          else item.published++;
+        }
+        stats.set(work.authorId,item);
+      }
+      return stats;
+    },
+    async review(id,{decision,note,expectedRevision,verifyActor}={}){
       await ready;assert(decision==='approve'||decision==='reject','审核操作不支持。');
       assert(Number.isInteger(expectedRevision)&&expectedRevision>=1,'请提供已查看的作品版本。');
       return serial(id,async()=>{
+        if(verifyActor)await verifyActor();
         const existing=await get(id);assert(existing,'作品不存在。',404);
         assert(!existing.deletedAt,'作品已移除，无法审核。',409);
         assert(existing.revision===expectedRevision,'作品已更新，请重新查看内容后审核。',409);
@@ -190,10 +208,10 @@ export function createStore(directory){
         await commit(work);return work;
       });
     },
-    async setDeleted(id,deleted,revision,actorId){
+    async setDeleted(id,deleted,revision,actorId,{allowDeletedAuthor=false}={}){
       await ready;return serial(id,async()=>{
         const existing=await get(id);assert(existing,'作品不存在。',404);
-        assert(existing.status!=='withdrawn'||existing.authorId===actorId,'下架作品仅创作者本人可以操作。',403);
+        assert(existing.status!=='withdrawn'||existing.authorId===actorId||allowDeletedAuthor,'下架作品仅创作者本人可以操作。',403);
         assert(existing.revision===revision,'作品已更新，请刷新后重试。',409);
         const work={...existing,revision:existing.revision+1,updated:Date.now(),deletedAt:deleted?Date.now():null,requestId:null};
         await commit(work);return work;

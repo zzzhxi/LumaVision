@@ -15,7 +15,7 @@ import { createAuthStore, socialLinks, SESSION_COOKIE, SESSION_TTL } from './aut
 
 const root=resolve(import.meta.dirname);
 const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.jpg':'image/jpeg','.webp':'image/webp','.png':'image/png','.gif':'image/gif','.mp4':'video/mp4','.webm':'video/webm'};
-const publicFiles=new Set(['/index.html','/styles.css','/uploads.css','/auth.css','/auth-ui.js','/app.js','/studio.js','/generation-ui.js','/drafts.js','/media.js','/data.js','/favicon.svg']);
+const publicFiles=new Set(['/index.html','/styles.css','/uploads.css','/auth.css','/auth-ui.js','/app.js','/studio.js','/generation-ui.js','/drafts.js','/media.js','/data.js','/email-domains.js','/favicon.svg']);
 const json=(res,status,body)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(body));};
 async function body(req,max){
   if(Number(req.headers['content-length'])>max)throw new HttpError(413,'上传内容过大。');
@@ -68,9 +68,9 @@ function serveFile(req,res,file,size,mtimeMs){
   if(req.method==='HEAD'||!size){res.end();return;}
   const stream=createReadStream(file,{start,end});stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());stream.pipe(res);
 }
-export async function createApp({storageRoot=resolve(root,'data'),sendAuthCode,ffmpeg,generationFetch,generationTimeoutMs,captchaFactory}={}){
+export async function createApp({storageRoot=resolve(root,'data'),sendAuthCode,ffmpeg,generationFetch,generationTimeoutMs,captchaFactory,registrationEmailDomains}={}){
   const store=createStore(storageRoot);
-  const auth=createAuthStore(storageRoot,{sendCode:sendAuthCode,captchaFactory});
+  const auth=createAuthStore(storageRoot,{sendCode:sendAuthCode,captchaFactory,registrationEmailDomains});
   const generations=createGenerationStore(storageRoot);
   const generationService=createGenerationService(storageRoot,generations,{fetchImpl:generationFetch,timeoutMs:generationTimeoutMs});
   const derivatives=createDerivatives(storageRoot,{ffmpeg});
@@ -81,7 +81,10 @@ export async function createApp({storageRoot=resolve(root,'data'),sendAuthCode,f
   async function withAuthors(works){
     const profiles=await auth.profilesByIds([...new Set(works.map(work=>work.authorId).filter(Boolean))]);
     const enabled=await derivatives.ready;
-    return works.map(work=>({...work,media:work.media.map(media=>({...media,...(enabled?{thumbnailUrl:`/thumbnails/${media.id}/640.jpg`,thumbnailSmall:`/thumbnails/${media.id}/320.jpg`,thumbnailLarge:`/thumbnails/${media.id}/1280.jpg`}:{})})),authorProfile:profiles.get(work.authorId)||null}));
+    return works.map(work=>{
+      const profile=profiles.get(work.authorId)||null;
+      return {...work,author:profile?.deleted?'已注销用户':work.author,media:work.media.map(media=>({...media,...(enabled?{thumbnailUrl:`/thumbnails/${media.id}/640.jpg`,thumbnailSmall:`/thumbnails/${media.id}/320.jpg`,thumbnailLarge:`/thumbnails/${media.id}/1280.jpg`}:{})})),authorProfile:profile};
+    });
   }
   async function listResponse(req,works,extra={}){
     const params=new URL(req.url,'http://localhost').searchParams;
@@ -96,7 +99,7 @@ export async function createApp({storageRoot=resolve(root,'data'),sendAuthCode,f
   };
   const requireAdmin=async req=>{
     const user=await requireUser(req);
-    assert(user.role==='admin','仅管理员可以执行审核操作。',403);
+    assert(user.role==='admin','仅管理员可以访问管理后台。',403);
     return user;
   };
   const metrics=()=>({uploads:{active:activeUploads,reservedBytes:uploadBytes},storage:store.metrics(),derivatives:derivatives.metrics(),memory:process.memoryUsage()});
@@ -105,9 +108,10 @@ export async function createApp({storageRoot=resolve(root,'data'),sendAuthCode,f
     const user=await requireUser(req);
     const work=await store.get(id);
     assert(work,'作品不存在。',404);
-    assert(work.status!=='withdrawn'||work.authorId===user.id,'下架作品仅创作者本人可以操作。',403);
+    const author=work.authorId?await auth.userById(work.authorId):null,authorDeleted=Boolean(author?.deletedAt);
+    assert(work.status!=='withdrawn'||work.authorId===user.id||(user.role==='admin'&&authorDeleted),'下架作品仅创作者本人可以操作。',403);
     assert(!work.authorId||work.authorId===user.id||user.role==='admin','只能管理自己发布的作品。',403);
-    return {user,work};
+    return {user,work,authorDeleted};
   }
   const server=createServer(async(req,res)=>{
     try{
@@ -119,10 +123,14 @@ export async function createApp({storageRoot=resolve(root,'data'),sendAuthCode,f
         await requireAdmin(req);json(res,200,await generationService.settings(true));return;
       }
       if(path==='/api/admin/generation-config'&&req.method==='PUT'){
-        sameOrigin(req);await requireAdmin(req);json(res,200,await generationService.save(await readJson(req,32768)));return;
+        sameOrigin(req);const actor=await requireAdmin(req),input=await readJson(req,32768);
+        await auth.assertActiveAdmin(actor.id);
+        json(res,200,await generationService.save(input));return;
       }
       if(path==='/api/admin/generation-models'&&req.method==='POST'){
-        sameOrigin(req);await requireAdmin(req);json(res,200,await generationService.models(await readJson(req,32768)));return;
+        sameOrigin(req);const actor=await requireAdmin(req),input=await readJson(req,32768);
+        await auth.assertActiveAdmin(actor.id);
+        json(res,200,await generationService.models(input));return;
       }
       if(path==='/api/generation/config'&&req.method==='GET'){
         await requireUser(req);json(res,200,await generationService.settings());return;
@@ -143,6 +151,26 @@ export async function createApp({storageRoot=resolve(root,'data'),sendAuthCode,f
         }finally{try{await upload?.cleanup();}finally{if(!released){activeUploads--;uploadBytes-=reserved;}}}
       }
       if(path==='/api/admin/metrics'&&req.method==='GET'){await requireAdmin(req);json(res,200,metrics());return;}
+      if(path==='/api/admin/users'&&req.method==='GET'){
+        await requireAdmin(req);
+        const params=new URL(req.url,'http://localhost').searchParams,stats=await store.statsByAuthor();
+        const result=await auth.listUsersForAdmin({
+          q:params.get('q')||'',role:params.get('role')||'all',status:params.get('status')||'all',
+          creatorStatus:params.get('creatorStatus')||'all',kind:params.get('kind')||'all',
+          page:params.get('page')||1,limit:params.get('limit')||20
+        });
+        result.users=result.users.map(user=>({...user,works:stats.get(user.id)||{total:0,published:0,pending:0,draft:0,rejected:0,withdrawn:0,deleted:0}}));
+        json(res,200,result);return;
+      }
+      const adminUserAction=/^\/api\/admin\/users\/(user-[0-9a-f-]{36})$/.exec(path);
+      if(adminUserAction&&req.method==='PATCH'){
+        sameOrigin(req);const actor=await requireAdmin(req),input=await readJson(req,8192);
+        json(res,200,{user:await auth.adminUpdateUser(actor.id,adminUserAction[1],input)});return;
+      }
+      if(adminUserAction&&req.method==='DELETE'){
+        sameOrigin(req);const actor=await requireAdmin(req),input=await readJson(req,8192);
+        json(res,200,{user:await auth.adminDeleteUser(actor.id,adminUserAction[1],{confirmEmail:input.confirmEmail})});return;
+      }
       if(path==='/api/auth/me'&&req.method==='GET'){
         const user=await sessionUser(req);
         json(res,200,{user:user?auth.publicUser(user):null,emailDelivery:emailDeliveryMode()});return;
@@ -250,9 +278,9 @@ export async function createApp({storageRoot=resolve(root,'data'),sendAuthCode,f
       }
       const reviewAction=/^\/api\/admin\/works\/(work-[0-9a-f-]{36})\/review$/.exec(path);
       if(reviewAction&&req.method==='POST'){
-        sameOrigin(req);await requireAdmin(req);
+        sameOrigin(req);const actor=await requireAdmin(req);
         const input=await readJson(req);
-        const work=await store.review(reviewAction[1],{decision:input.decision,note:input.note,expectedRevision:input.expectedRevision});
+        const work=await store.review(reviewAction[1],{decision:input.decision,note:input.note,expectedRevision:input.expectedRevision,verifyActor:()=>auth.assertActiveAdmin(actor.id)});
         json(res,200,{work:(await withAuthors([work]))[0]});return;
       }
       // ---- 创作者申请审核（管理员） ----
@@ -263,9 +291,9 @@ export async function createApp({storageRoot=resolve(root,'data'),sendAuthCode,f
       }
       const creatorReviewAction=/^\/api\/admin\/creators\/(user-[0-9a-f-]{36})\/review$/.exec(path);
       if(creatorReviewAction&&req.method==='POST'){
-        sameOrigin(req);await requireAdmin(req);
+        sameOrigin(req);const actor=await requireAdmin(req);
         const input=await readJson(req);
-        const user=await auth.reviewCreator(creatorReviewAction[1],{decision:input.decision,note:input.note});
+        const user=await auth.reviewCreator(creatorReviewAction[1],{decision:input.decision,note:input.note,actorId:actor.id});
         json(res,200,{user:auth.publicUser(user)});return;
       }
       // ---- 作品 ----
@@ -325,10 +353,10 @@ export async function createApp({storageRoot=resolve(root,'data'),sendAuthCode,f
       }
       const workAction=/^\/api\/works\/(work-[0-9a-f-]{36})(\/restore)?$/.exec(path);
       if(workAction&&((!workAction[2]&&req.method==='DELETE')||(workAction[2]&&req.method==='POST'))){
-        sameOrigin(req);const {user}=await requireWorkOwner(req,workAction[1]);
+        sameOrigin(req);const {user,authorDeleted}=await requireWorkOwner(req,workAction[1]);
         let input;try{input=JSON.parse((await body(req,1024)).toString());}catch(error){if(error instanceof HttpError)throw error;throw new HttpError(400,'请求格式不正确。');}
         if(!input||typeof input!=='object'||Array.isArray(input))throw new HttpError(400,'请求格式不正确。');
-        json(res,200,{work:(await withAuthors([await store.setDeleted(workAction[1],!workAction[2],input.revision,user.id)]))[0]});return;
+        json(res,200,{work:(await withAuthors([await store.setDeleted(workAction[1],!workAction[2],input.revision,user.id,{allowDeletedAuthor:user.role==='admin'&&authorDeleted})]))[0]});return;
       }
       if(!['GET','HEAD'].includes(req.method))throw new HttpError(405,'不支持此请求方式。');
       const generatedThumbnail=/^\/generation-thumbnails\/([0-9a-f-]{36}\.(?:jpg|png|webp|gif))\/(320|640|1280)\.jpg$/.exec(path);

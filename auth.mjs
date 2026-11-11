@@ -4,6 +4,7 @@ import { createHash, randomInt, randomUUID, randomBytes, timingSafeEqual, scrypt
 import { promisify } from 'node:util';
 import { sendAuthCode } from './email.mjs';
 import { renderCaptcha, CAPTCHA_ALPHABET } from './captcha.mjs';
+import { REGISTRATION_EMAIL_DOMAIN_VALUES, emailDomain } from './email-domains.js';
 import { HttpError } from './storage.mjs';
 import { withWriteLock } from './write-lock.mjs';
 
@@ -90,10 +91,11 @@ function assertCreatorLinks(value){
   return links;
 }
 
-export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=defaultCaptchaFactory}={}){
+export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=defaultCaptchaFactory,registrationEmailDomains=REGISTRATION_EMAIL_DOMAIN_VALUES}={}){
   const authDir=join(directory,'auth');
   let queue=Promise.resolve();
   const loginFailures=new Map();
+  const allowedRegistrationDomains=registrationEmailDomains===null?null:new Set(registrationEmailDomains.map(domain=>String(domain).toLowerCase()));
   const ready=mkdir(authDir,{recursive:true});
   const serial=fn=>{const next=queue.then(()=>withWriteLock(directory,'auth',fn));queue=next.catch(()=>{});return next;};
   const fileName=name=>join(authDir,name);
@@ -120,19 +122,42 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
   const loadCodes=()=>readJson('codes.json',{codes:{}});
   const loadCaptchas=()=>readJson('captchas.json',{captchas:{}});
   const accountType=user=>user.accountType||((user.creatorStatus||'none')!=='none'?'creator':'personal');
+  const importedUser=user=>user.importedAuthor===true||String(user.email||'').endsWith('@import.lumavision.local');
+  const activeUser=user=>Boolean(user&&!user.disabledAt&&!user.deletedAt);
   const publicUser=user=>({id:user.id,email:user.email,nickname:user.nickname,social:user.social||{},role:user.role,accountType:accountType(user),onboardingComplete:user.onboardingComplete!==false,creatorStatus:user.creatorStatus||'none',creatorNote:user.creatorNote||null,hasPassword:typeof user.passwordHash==='string'&&user.passwordHash.startsWith('scrypt$'),createdAt:user.createdAt,avatarUrl:user.avatarUrl||null});
   // 公开主页只暴露“是否创作者”；审核中的申请与驳回原因属于隐私。
   const profileUser=user=>{
-    const approved=(user.creatorStatus||'none')==='approved';
-    return {id:user.id,nickname:user.nickname,creator:approved,social:approved?user.social||{}:{},createdAt:user.createdAt,avatarUrl:user.avatarUrl||null};
+    const deleted=Boolean(user.deletedAt),approved=!deleted&&(user.creatorStatus||'none')==='approved';
+    return {id:user.id,nickname:deleted?'已注销用户':user.nickname,creator:approved,social:approved?user.social||{}:{},createdAt:user.createdAt,avatarUrl:deleted?null:user.avatarUrl||null,deleted};
+  };
+  const adminUser=user=>({
+    id:user.id,email:user.email,nickname:user.deletedAt?'已注销用户':user.nickname,role:user.role,accountType:accountType(user),
+    creatorStatus:user.creatorStatus||'none',creatorNote:user.creatorNote||null,
+    importedAuthor:importedUser(user),envManaged:adminEmails().includes(String(user.email||'').toLowerCase()),
+    hasPassword:typeof user.passwordHash==='string'&&user.passwordHash.startsWith('scrypt$'),
+    googleLinked:Boolean(user.googleId),onboardingComplete:user.onboardingComplete!==false,
+    createdAt:user.createdAt||null,lastLoginAt:user.lastLoginAt||null,avatarUrl:user.deletedAt?null:user.avatarUrl||null,
+    disabledAt:user.disabledAt||null,disabledReason:user.disabledReason||null,
+    deletedAt:user.deletedAt||null
+  });
+  const activeAdmins=data=>Object.values(data.users).filter(user=>user.role==='admin'&&activeUser(user)&&!importedUser(user));
+  const cleanNote=(value,max=200)=>{
+    assert(value===undefined||typeof value==='string','备注格式不正确。');
+    const note=typeof value==='string'?value.trim():'';
+    assert(note.length<=max,`备注不能超过 ${max} 字。`);
+    return note;
   };
   const normalizeEmail=email=>{
     assert(typeof email==='string'&&email.length<=120&&emailRule.test(email),'请输入有效的邮箱地址。');
     return email.trim().toLowerCase();
   };
+  const assertRegistrationEmail=email=>{
+    if(!allowedRegistrationDomains)return;
+    assert(allowedRegistrationDomains.has(emailDomain(email)),'注册仅支持 163、QQ、Gmail、Outlook、126、Hotmail 常见个人邮箱。');
+  };
   const adminEmails=()=>String(process.env.ADMIN_EMAILS||'').split(',').map(item=>item.trim().toLowerCase()).filter(Boolean);
   const defaultNickname=(email,nickname)=>cleanNickname(nickname||email.split('@')[0].slice(0,20));
-  const shouldSeedAdmin=(data,email)=>!Object.values(data.users).some(item=>item.role==='admin'&&!item.importedAuthor&&!item.email.endsWith('@import.lumavision.local'))||adminEmails().includes(email);
+  const shouldSeedAdmin=(data,email)=>!Object.values(data.users).some(item=>item.role==='admin'&&!item.deletedAt&&!importedUser(item))||adminEmails().includes(email);
   function upsertUser(data,email,{nickname,googleId,avatarUrl,importedAuthor=false,passwordHash:hash,now=Date.now()}={}) {
     let user=Object.values(data.users).find(item=>item.email===email);
     if(!user){
@@ -167,6 +192,21 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
     if(expected.length!==received.length||!timingSafeEqual(expected,received))throw new HttpError(401,'图形验证码不正确，请重新输入。');
     return entry;
   }
+  // 账号停用或注销时，同时失效其会话与邮箱验证码/发送预留。
+  async function revokeCredentials(email,userId){
+    const sessions=await loadSessions();
+    let sessionsChanged=false;
+    for(const [token,session] of Object.entries(sessions.sessions||{})){
+      if(session.userId===userId){delete sessions.sessions[token];sessionsChanged=true;}
+    }
+    if(sessionsChanged)await writeJson('sessions.json',sessions);
+    const codes=await loadCodes();
+    let codesChanged=false;
+    const matches=key=>key===email||key.endsWith(`:${email}`);
+    for(const key of Object.keys(codes.codes||{}))if(matches(key)){delete codes.codes[key];codesChanged=true;}
+    for(const key of Object.keys(codes.reservations||{}))if(matches(key)){delete codes.reservations[key];codesChanged=true;}
+    if(codesChanged)await writeJson('codes.json',codes);
+  }
   return {
     ready,
     normalizeEmail,
@@ -176,11 +216,12 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
       await ready;
       const email=normalizeEmail(rawEmail);
       assert(!email.endsWith('@import.lumavision.local'),'导入作者不支持邮箱登录。',403);
+      if(purpose==='register')assertRegistrationEmail(email);
       if(requireNew||requireExisting){
         const users=await loadUsers();
-        const existing=Object.values(users.users).some(user=>user.email===email);
+        const existing=Object.values(users.users).find(user=>user.email===email);
         if(requireNew)assert(!existing,'该邮箱已注册，请直接登录。',409);
-        if(requireExisting)assert(existing,'该邮箱尚未注册。',404);
+        if(requireExisting)assert(existing&&activeUser(existing),purpose==='reset'?'该邮箱尚未注册。':'该账号已停用，请联系管理员。',purpose==='reset'?404:403);
       }
       const challengeId=randomUUID(),code=String(randomInt(0,1000000)).padStart(6,'0');
       const key=codeKey(purpose,email);
@@ -202,6 +243,8 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
         await serial(async()=>{
           const data=await loadCodes();
           assert(data.reservations?.[key]?.challengeId===challengeId,'验证码请求已失效，请重新获取。',409);
+          const users=await loadUsers(),existing=Object.values(users.users).find(user=>user.email===email);
+          assert(purpose==='register'?!existing:Boolean(existing&&activeUser(existing)),'验证码请求已失效，请重新获取。',409);
           data.codes[key]={challengeId,purpose,hash:secretHash(challengeId,code),sentAt:now,expiresAt:now+CODE_TTL,attempts:0,consumed:false};
           delete data.reservations[key];
           await writeJson('codes.json',data);
@@ -234,6 +277,7 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
       await ready;
       const email=normalizeEmail(rawEmail);
       assert(!email.endsWith('@import.lumavision.local'),'该邮箱不能用于注册。',403);
+      assertRegistrationEmail(email);
       assert(typeof code==='string'&&/^\d{6}$/.test(code),'请输入 6 位数字验证码。');
       assert(typeof challengeId==='string'&&challengeId.length<=80,'请先获取验证码。');
       assert(typeof captchaId==='string'&&captchaId.length<=80,'请先获取图形验证码。');
@@ -271,6 +315,7 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
         loginFailures.set(email,{count,updatedAt:now,lockedUntil:count>=5?now+10*60*1000:0});
         throw new HttpError(401,'邮箱或密码不正确。');
       }
+      assert(activeUser(user),'该账号已停用，请联系管理员。',403);
       loginFailures.delete(email);
       return user;
     },
@@ -282,7 +327,7 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
       const cleanedPassword=cleanPassword(password);
       return serial(async()=>{
         const data=await loadUsers(),user=Object.values(data.users).find(item=>item.email===email);
-        assert(user,'该邮箱尚未注册。',404);
+        assert(user&&activeUser(user),'验证码已失效，请重新获取。',401);
         const codes=await loadCodes();
         try{takeCode(codes,email,'reset',code,challengeId,now);}
         catch(error){await writeJson('codes.json',codes);throw error;}
@@ -303,6 +348,7 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
       return serial(async()=>{
         const data=await loadUsers(),user=data.users[userId];
         assert(user,'用户不存在。',404);
+        assert(activeUser(user),'该账号已停用，请联系管理员。',403);
         const codes=await loadCodes();
         try{takeCode(codes,user.email,'password',code,challengeId,now);}
         catch(error){await writeJson('codes.json',codes);throw error;}
@@ -322,6 +368,7 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
       return serial(async()=>{
         const data=await loadUsers(),user=data.users[userId];
         assert(user,'用户不存在。',404);
+        assert(activeUser(user),'该账号已停用，请联系管理员。',403);
         assert(user.onboardingComplete===false,'账号身份已设置，可在个人资料页申请创作者。',409);
         if(typeof nickname==='string'&&nickname.trim())user.nickname=cleanNickname(nickname);
         user.accountType=type;
@@ -357,6 +404,10 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
     async profilesByIds(ids){const data=await loadUsers();return new Map(ids.map(id=>[id,data.users[id]?profileUser(data.users[id]):null]));},
     async createSession(userId,now=Date.now()){
       return serial(async()=>{
+        const users=await loadUsers(),user=users.users[userId];
+        assert(user&&activeUser(user),'该账号已停用，请联系管理员。',403);
+        user.lastLoginAt=now;
+        await writeJson('users.json',users);
         const data=await loadSessions();
         for(const [key,session] of Object.entries(data.sessions))if(session.expiresAt<now)delete data.sessions[key];
         const token=randomBytes(32).toString('hex');
@@ -369,7 +420,8 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
       if(!token||typeof token!=='string'||token.length>128)return null;
       const data=await loadSessions();const session=data.sessions[token];
       if(!session||session.expiresAt<now)return null;
-      return this.userById(session.userId);
+      const user=await this.userById(session.userId);
+      return activeUser(user)?user:null;
     },
     async destroySession(token){
       if(!token)return;
@@ -382,6 +434,7 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
       return serial(async()=>{
         const data=await loadUsers();const user=data.users[userId];
         assert(user,'用户不存在。',404);
+        assert(activeUser(user),'该账号已停用，请联系管理员。',403);
         if(nickname!==undefined)user.nickname=cleanNickname(nickname);
         if(social!==undefined)user.social=socialLinks(social);
         await writeJson('users.json',data);return user;
@@ -394,6 +447,7 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
       return serial(async()=>{
         const data=await loadUsers();const user=data.users[userId];
         assert(user,'用户不存在。',404);
+        assert(activeUser(user),'该账号已停用，请联系管理员。',403);
         const status=user.creatorStatus||'none';
         assert(status!=='pending','已提交申请，请等待审核。',409);
         assert(status!=='approved','你已经是创作者。',409);
@@ -407,11 +461,16 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
         await writeJson('users.json',data);return user;
       });
     },
-    async reviewCreator(id,{decision,note,now=Date.now()}={}){
+    async reviewCreator(id,{decision,note,actorId,now=Date.now()}={}){
       await ready;assert(decision==='approve'||decision==='reject','审核操作不支持。');
       return serial(async()=>{
         const data=await loadUsers();const user=data.users[id];
+        if(actorId!==undefined){
+          const actor=data.users[actorId];
+          assert(actor?.role==='admin'&&activeUser(actor),'仅管理员可以访问管理后台。',403);
+        }
         assert(user,'用户不存在。',404);
+        assert(activeUser(user),'该账号当前不可审核。',409);
         assert((user.creatorStatus||'none')==='pending','该账号没有待审核的创作者申请。',409);
         if(decision==='approve'){
           user.creatorStatus='approved';user.creatorNote=null;
@@ -427,10 +486,141 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
       await ready;assert(['pending','rejected'].includes(status),'申请状态不支持。');
       const data=await loadUsers();
       return Object.values(data.users)
-        .filter(user=>(user.creatorStatus||'none')===status)
+        .filter(user=>activeUser(user)&&(user.creatorStatus||'none')===status)
         .sort((a,b)=>(b.creatorRequestedAt||0)-(a.creatorRequestedAt||0))
         .map(publicUser);
     },
-    publicUser,profileUser
+    async assertActiveAdmin(userId){
+      await ready;
+      const data=await loadUsers(),user=data.users[userId];
+      assert(user?.role==='admin'&&activeUser(user),'仅管理员可以访问管理后台。',403);
+      return user;
+    },
+    async listUsersForAdmin({q='',role='all',status='all',creatorStatus='all',kind='all',page=1,limit=20}={}){
+      await ready;
+      assert(typeof q==='string'&&q.length<=120,'搜索条件过长。');
+      assert(['all','user','admin'].includes(role),'角色筛选不支持。');
+      assert(['all','active','disabled','deleted'].includes(status),'账号状态筛选不支持。');
+      assert(['all','none','pending','approved','rejected'].includes(creatorStatus),'创作者状态筛选不支持。');
+      assert(['all','login','imported'].includes(kind),'账号类型筛选不支持。');
+      const pageNumber=Number(page),pageSize=Number(limit);
+      assert(Number.isInteger(pageNumber)&&pageNumber>=1,'页码不正确。');
+      assert(Number.isInteger(pageSize)&&pageSize>=1&&pageSize<=50,'每页数量需为 1-50。');
+      const data=await loadUsers(),allUsers=Object.values(data.users);
+      const visible=allUsers.filter(user=>!user.deletedAt);
+      const counts={
+        total:visible.length,
+        admins:visible.filter(user=>user.role==='admin'&&activeUser(user)&&!importedUser(user)).length,
+        disabled:visible.filter(user=>user.disabledAt).length,
+        creators:visible.filter(user=>(user.creatorStatus||'none')==='approved').length,
+        pendingCreators:visible.filter(user=>(user.creatorStatus||'none')==='pending'&&!user.disabledAt).length,
+        imported:visible.filter(importedUser).length,
+        deleted:allUsers.filter(user=>user.deletedAt).length
+      };
+      const query=q.trim().toLowerCase();
+      const filtered=allUsers.filter(user=>{
+        if(status==='all'&&user.deletedAt)return false;
+        if(status==='active'&&(!activeUser(user)||user.deletedAt))return false;
+        if(status==='disabled'&&(user.deletedAt||!user.disabledAt))return false;
+        if(status==='deleted'&&!user.deletedAt)return false;
+        if(role!=='all'&&user.role!==role)return false;
+        if(creatorStatus!=='all'&&(user.creatorStatus||'none')!==creatorStatus)return false;
+        if(kind==='login'&&importedUser(user))return false;
+        if(kind==='imported'&&!importedUser(user))return false;
+        if(query&&![user.email,user.nickname,user.id].join(' ').toLowerCase().includes(query))return false;
+        return true;
+      }).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)||b.id.localeCompare(a.id));
+      const total=filtered.length,pages=Math.max(1,Math.ceil(total/pageSize)),currentPage=Math.min(pageNumber,pages);
+      const users=filtered.slice((currentPage-1)*pageSize,currentPage*pageSize).map(adminUser);
+      return {users,total,page:currentPage,pages,limit:pageSize,counts};
+    },
+    async adminUpdateUser(actorId,id,changes={},now=Date.now()){
+      await ready;
+      assert(/^user-[0-9a-f-]{36}$/.test(id),'用户编号不正确。');
+      assert(changes&&typeof changes==='object'&&!Array.isArray(changes),'账号修改信息不正确。');
+      const keys=Object.keys(changes),allowed=['role','creatorStatus','creatorNote','disabled','disabledReason'];
+      assert(keys.length>0,'没有需要保存的修改。');
+      assert(keys.every(key=>allowed.includes(key)),'账号修改信息不正确。');
+      if(changes.role!==undefined)assert(['user','admin'].includes(changes.role),'角色不支持。');
+      if(changes.creatorStatus!==undefined)assert(['none','approved','rejected'].includes(changes.creatorStatus),'创作者状态不支持。');
+      if(changes.disabled!==undefined)assert(typeof changes.disabled==='boolean','停用状态不正确。');
+      if(changes.creatorNote!==undefined)assert(changes.creatorStatus==='rejected','只有驳回时需要填写原因。');
+      if(changes.disabledReason!==undefined)assert(changes.disabled===true,'只有停用时可以填写原因。');
+      return serial(async()=>{
+        const data=await loadUsers(),actor=data.users[actorId],user=data.users[id];
+        assert(actor?.role==='admin'&&activeUser(actor),'仅管理员可以访问管理后台。',403);
+        assert(user,'用户不存在。',404);
+        assert(!user.deletedAt,'已注销账号不能修改。',409);
+        assert(!importedUser(user),'导入作者档案为只读。',403);
+        const self=actorId===id,envManaged=adminEmails().includes(String(user.email||'').toLowerCase());
+        if(self&&(changes.role!==undefined||changes.disabled!==undefined))throw new HttpError(403,'不能修改自己的角色或停用状态。');
+        if(envManaged&&(changes.role!==undefined||changes.disabled!==undefined))throw new HttpError(403,'该账号由 ADMIN_EMAILS 管理，请先修改环境变量。');
+        const ensureAdminRemains=()=>{
+          if(user.role==='admin'&&activeAdmins(data).filter(item=>item.id!==user.id).length<1)throw new HttpError(409,'至少需要保留一个有效管理员。');
+        };
+        let revoke=false;
+        if(changes.role!==undefined&&changes.role!==user.role){
+          if(changes.role==='user')ensureAdminRemains();
+          user.role=changes.role;
+        }
+        if(changes.disabled!==undefined){
+          if(changes.disabled){
+            if(!user.disabledAt){
+              ensureAdminRemains();
+              user.disabledAt=now;user.disabledBy=actorId;user.disabledReason=cleanNote(changes.disabledReason)||null;
+            }else if(changes.disabledReason!==undefined){
+              user.disabledReason=cleanNote(changes.disabledReason)||null;
+            }
+            revoke=true;
+          }else{
+            user.disabledAt=null;user.disabledBy=null;user.disabledReason=null;
+          }
+        }
+        if(changes.creatorStatus!==undefined){
+          if(changes.creatorStatus==='approved'){
+            user.creatorStatus='approved';user.creatorNote=null;user.creatorReviewedAt=now;user.accountType='creator';user.onboardingComplete=true;
+          }else if(changes.creatorStatus==='rejected'){
+            assert((user.creatorStatus||'none')!=='none','该账号没有可驳回的创作者申请。',409);
+            const note=cleanNote(changes.creatorNote);
+            assert(note.length>0,'请填写 200 字以内的未通过原因。');
+            user.creatorStatus='rejected';user.creatorNote=note;user.creatorReviewedAt=now;user.accountType='personal';user.onboardingComplete=true;
+          }else{
+            user.creatorStatus='none';user.creatorNote=null;user.creatorReviewedAt=now;user.accountType='personal';
+          }
+        }
+        user.adminUpdatedAt=now;
+        if(revoke)await revokeCredentials(user.email,user.id);
+        await writeJson('users.json',data);
+        return adminUser(user);
+      });
+    },
+    async adminDeleteUser(actorId,id,{confirmEmail}={},now=Date.now()){
+      await ready;
+      assert(/^user-[0-9a-f-]{36}$/.test(id),'用户编号不正确。');
+      assert(typeof confirmEmail==='string','请输入完整邮箱确认注销。');
+      return serial(async()=>{
+        const data=await loadUsers(),actor=data.users[actorId],user=data.users[id];
+        assert(actor?.role==='admin'&&activeUser(actor),'仅管理员可以访问管理后台。',403);
+        assert(user,'用户不存在。',404);
+        assert(!user.deletedAt,'该账号已注销。',409);
+        assert(actorId!==id,'不能注销自己的账号。',403);
+        assert(!importedUser(user),'导入作者档案为只读。',403);
+        if(adminEmails().includes(String(user.email||'').toLowerCase()))throw new HttpError(403,'该账号由 ADMIN_EMAILS 管理，请先修改环境变量。');
+        if(user.role==='admin'&&activeAdmins(data).filter(item=>item.id!==user.id).length<1)throw new HttpError(409,'至少需要保留一个有效管理员。');
+        assert(confirmEmail.trim().toLowerCase()===String(user.email||'').toLowerCase(),'请输入完整邮箱确认注销。');
+        const oldEmail=user.email;
+        user.deletedAt=now;user.deletedBy=actorId;
+        user.email=`deleted-${user.id.slice('user-'.length)}@deleted.lumavision.local`;
+        user.nickname='已注销用户';user.social={};user.role='user';user.accountType='personal';
+        user.onboardingComplete=true;user.creatorStatus='none';user.creatorNote=null;user.creatorReviewedAt=now;
+        user.creatorRequestedAt=null;user.passwordHash=null;user.passwordChangedAt=null;user.googleId=null;user.avatarUrl=null;
+        user.disabledAt=null;user.disabledBy=null;user.disabledReason=null;user.lastLoginAt=null;
+        user.importedAuthor=false;user.adminUpdatedAt=now;
+        await revokeCredentials(oldEmail,user.id);
+        await writeJson('users.json',data);
+        return adminUser(user);
+      });
+    },
+    publicUser,profileUser,adminUser
   };
 }
