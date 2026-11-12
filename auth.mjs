@@ -91,7 +91,7 @@ function assertCreatorLinks(value){
   return links;
 }
 
-export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=defaultCaptchaFactory,registrationEmailDomains=REGISTRATION_EMAIL_DOMAIN_VALUES}={}){
+export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=defaultCaptchaFactory,registrationEmailDomains=REGISTRATION_EMAIL_DOMAIN_VALUES,seedFirstAdmin=true}={}){
   const authDir=join(directory,'auth');
   let queue=Promise.resolve();
   const loginFailures=new Map();
@@ -157,7 +157,7 @@ export function createAuthStore(directory,{sendCode=sendAuthCode,captchaFactory=
   };
   const adminEmails=()=>String(process.env.ADMIN_EMAILS||'').split(',').map(item=>item.trim().toLowerCase()).filter(Boolean);
   const defaultNickname=(email,nickname)=>cleanNickname(nickname||email.split('@')[0].slice(0,20));
-  const shouldSeedAdmin=(data,email)=>!Object.values(data.users).some(item=>item.role==='admin'&&!item.deletedAt&&!importedUser(item))||adminEmails().includes(email);
+  const shouldSeedAdmin=(data,email)=>adminEmails().includes(email)||(seedFirstAdmin&&!Object.values(data.users).some(item=>item.role==='admin'&&!item.deletedAt&&!importedUser(item)));
   function upsertUser(data,email,{nickname,googleId,avatarUrl,importedAuthor=false,passwordHash:hash,now=Date.now()}={}) {
     let user=Object.values(data.users).find(item=>item.email===email);
     if(!user){

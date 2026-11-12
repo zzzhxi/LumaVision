@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
-import { resolve, extname, sep } from 'node:path';
+import { resolve, extname, isAbsolute, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createStore, HttpError, limits } from './storage.mjs';
 import { createGenerationStore } from './generations.mjs';
@@ -9,7 +9,7 @@ import { createGenerationService } from './generation-service.mjs';
 import { queryWorks, workCard } from './work-query.mjs';
 import { readMultipart } from './multipart.mjs';
 import { createDerivatives } from './derivatives.mjs';
-import { emailDeliveryMode } from './email.mjs';
+import { emailDeliveryMode, sendAuthCode as sendConfiguredAuthCode } from './email.mjs';
 import { loadMailConfig } from './mail-config.mjs';
 import { createAuthStore, socialLinks, SESSION_COOKIE, SESSION_TTL } from './auth.mjs';
 
@@ -22,10 +22,6 @@ async function body(req,max){
   const chunks=[];let size=0;
   for await(const chunk of req){size+=chunk.length;if(size>max)throw new HttpError(413,'上传内容过大。');chunks.push(chunk);}
   return Buffer.concat(chunks);
-}
-function sameOrigin(req){
-  if(req.headers['sec-fetch-site']==='cross-site')throw new HttpError(403,'请从本网站发起上传。');
-  if(req.headers.origin){try{if(new URL(req.headers.origin).host!==req.headers.host)throw new Error();}catch{throw new HttpError(403,'请从本网站发起上传。');}}
 }
 async function readJson(req,max=4096){
   const bytes=await body(req,max);
@@ -43,7 +39,6 @@ function cookieValue(req,name){
   }
   return null;
 }
-const sessionCookie=(token,maxAgeSeconds)=>`${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
 function serveFile(req,res,file,size,mtimeMs){
   const mime=types[extname(file)]||'application/octet-stream';
   const headers={'Content-Type':mime,'Accept-Ranges':'bytes','Cache-Control':res.getHeader('Cache-Control')||'no-cache','X-Content-Type-Options':'nosniff'};
@@ -68,9 +63,27 @@ function serveFile(req,res,file,size,mtimeMs){
   if(req.method==='HEAD'||!size){res.end();return;}
   const stream=createReadStream(file,{start,end});stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());stream.pipe(res);
 }
-export async function createApp({storageRoot=resolve(root,'data'),sendAuthCode,ffmpeg,generationFetch,generationTimeoutMs,captchaFactory,registrationEmailDomains}={}){
+export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,sendAuthCode,ffmpeg,generationFetch,generationTimeoutMs,captchaFactory,registrationEmailDomains}={}){
+  let publicSite;
+  if(publicOrigin!==undefined&&URL.canParse(publicOrigin))publicSite=new URL(publicOrigin);
+  if(publicOrigin!==undefined&&(!publicSite||publicSite.protocol!=='https:'||
+    (publicOrigin!==publicSite.origin&&publicOrigin!==publicSite.origin+'/'))){
+    throw new Error('LUMA_PUBLIC_ORIGIN 必须是完整的 HTTPS 来源，不含路径、查询或片段。');
+  }
+  const mailOptions={allowDemo:!publicSite};
+  function sameOrigin(req){
+    const origin=req.headers.origin;
+    if(req.headers['sec-fetch-site']==='cross-site'||(origin!==undefined&&
+      (publicSite?origin!==publicSite.origin:!URL.canParse(origin)||new URL(origin).host!==req.headers.host))){
+      throw new HttpError(403,'请从本网站发起上传。');
+    }
+  }
+  const sessionCookie=(token,maxAgeSeconds)=>`${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${publicSite?'; Secure':''}`;
   const store=createStore(storageRoot);
-  const auth=createAuthStore(storageRoot,{sendCode:sendAuthCode,captchaFactory,registrationEmailDomains});
+  const auth=createAuthStore(storageRoot,{
+    sendCode:sendAuthCode??(input=>sendConfiguredAuthCode(input,mailOptions)),
+    captchaFactory,registrationEmailDomains,seedFirstAdmin:!publicSite
+  });
   const generations=createGenerationStore(storageRoot);
   const generationService=createGenerationService(storageRoot,generations,{fetchImpl:generationFetch,timeoutMs:generationTimeoutMs});
   const derivatives=createDerivatives(storageRoot,{ffmpeg});
@@ -116,7 +129,9 @@ export async function createApp({storageRoot=resolve(root,'data'),sendAuthCode,f
   const server=createServer(async(req,res)=>{
     try{
       const host=req.headers.host||'';
-      if(!/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host))throw new HttpError(403,'只允许从本机访问。');
+      if(publicSite?host.toLowerCase()!==publicSite.host:!/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host)){
+        throw new HttpError(403,publicSite?'请使用站点配置的域名访问。':'只允许从本机访问。');
+      }
       let path;try{path=decodeURIComponent(new URL(req.url,'http://localhost').pathname);}catch{throw new HttpError(400,'请求路径不正确。');}
       // ---- 账号与个人资料 ----
       if(path==='/api/admin/generation-config'&&req.method==='GET'){
@@ -173,7 +188,7 @@ export async function createApp({storageRoot=resolve(root,'data'),sendAuthCode,f
       }
       if(path==='/api/auth/me'&&req.method==='GET'){
         const user=await sessionUser(req);
-        json(res,200,{user:user?auth.publicUser(user):null,emailDelivery:emailDeliveryMode()});return;
+        json(res,200,{user:user?auth.publicUser(user):null,emailDelivery:emailDeliveryMode(mailOptions)});return;
       }
       if(path==='/api/auth/captcha'&&req.method==='GET'){
         json(res,200,await auth.createCaptcha());return;
@@ -224,7 +239,7 @@ export async function createApp({storageRoot=resolve(root,'data'),sendAuthCode,f
       if(path==='/api/auth/logout'&&req.method==='POST'){
         sameOrigin(req);
         await auth.destroySession(cookieValue(req,SESSION_COOKIE));
-        res.setHeader('Set-Cookie',`${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+        res.setHeader('Set-Cookie',sessionCookie('',0));
         json(res,200,{ok:true});return;
       }
       if(path==='/api/user/profile'&&req.method==='PATCH'){
@@ -407,6 +422,11 @@ export async function createApp({storageRoot=resolve(root,'data'),sendAuthCode,f
   return {server,store,auth,generations,metrics};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
-  await loadMailConfig(resolve(root,'mail.local.json'));
-  const {server}=await createApp();server.listen(5173,'127.0.0.1',()=>console.log('LumaVision: http://localhost:5173'));
+  const publicOrigin=process.env.LUMA_PUBLIC_ORIGIN,storageRoot=process.env.LUMA_STORAGE_ROOT;
+  if((publicOrigin!==undefined||storageRoot!==undefined)&&!isAbsolute(storageRoot||'')){
+    throw new Error('LUMA_STORAGE_ROOT 必须是绝对路径；启用公网模式时必须单独配置。');
+  }
+  if(publicOrigin===undefined)await loadMailConfig(resolve(root,'mail.local.json'));
+  const {server}=await createApp({publicOrigin,storageRoot});
+  server.listen(5173,'127.0.0.1',()=>console.log('LumaVision: '+(publicOrigin??'http://localhost:5173')));
 }

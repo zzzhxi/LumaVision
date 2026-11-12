@@ -579,3 +579,83 @@ body:has(.creation-nav [data-view=drafts].active) .cards{display:grid;grid-templ
 .admin-user-row>.button{grid-column:1 / -1;width:100%}
 .admin-generation-card{flex-direction:column;align-items:stretch}
 }
+
+/* Motion Prompt ports: keep the original timings, easing and amounts in the site's palette. */
+/* Motion Prompt #049 · MIT License (c) 2026 Shohei Ohtaki · https://showheyohtaki.github.io/motion-prompt/#049 */
+dialog[open]{animation:modal-enter .32s cubic-bezier(.215,.61,.355,1) both}
+dialog[open]::backdrop{background:rgba(18,20,28,.42);animation:backdrop-enter .32s cubic-bezier(.215,.61,.355,1) both}
+dialog.closing{animation:modal-exit .28s cubic-bezier(.645,.045,.355,1) both}
+dialog.closing{pointer-events:none}
+dialog.closing::backdrop{animation:backdrop-exit .28s cubic-bezier(.645,.045,.355,1) both}
+@keyframes modal-enter{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:scale(1)}}
+@keyframes backdrop-enter{from{opacity:0}to{opacity:1}}
+@keyframes modal-exit{from{opacity:1;transform:scale(1)}to{opacity:0;transform:scale(.94)}}
+@keyframes backdrop-exit{from{opacity:1}to{opacity:0}}
+
+/* Motion Prompt #056 · MIT License (c) 2026 Shohei Ohtaki · https://showheyohtaki.github.io/motion-prompt/#056 */
+.toast{right:18px;bottom:16px;left:auto;transform:translateX(240px);border-radius:10px;background:#26282c;box-shadow:0 6px 18px rgba(20,24,40,.25);padding:12px 18px 15px;transition:opacity .35s cubic-bezier(.645,.045,.355,1),transform .35s cubic-bezier(.645,.045,.355,1)}
+.toast.show{transform:translateX(0);animation:toast-enter .35s cubic-bezier(.215,.61,.355,1) both}
+.toast::after{content:'';position:absolute;left:10px;right:10px;bottom:7px;height:3px;border-radius:3px;background:#a3bef7;transform-origin:left;transform:scaleX(0)}
+.toast.show::after{animation:toast-life var(--toast-bar-time,1.8s) linear both}
+@keyframes toast-enter{from{transform:translateX(240px);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes toast-life{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+@media(max-width:580px){.toast{right:10px;bottom:10px;left:10px;max-width:none;text-align:center}}
+
+/* Motion Prompt #057 · MIT License (c) 2026 Shohei Ohtaki · https://showheyohtaki.github.io/motion-prompt/#057 */
+.admin-tabs{position:relative}
+.admin-tab{position:relative;transition:color .2s linear,background .2s linear}
+.admin-tab:after{content:'';position:absolute;left:12px;right:12px;bottom:2px;height:4px;border-radius:4px;background:var(--blue);transform:scaleX(0);transform-origin:center;transition:transform .25s cubic-bezier(.645,.045,.355,1);pointer-events:none}
+.admin-tab.active:after{transform:scaleX(1)}
+.page-view.entering{animation:panel-enter .3s cubic-bezier(.215,.61,.355,1) both}
+@keyframes panel-enter{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+/* Motion Prompt #060 · MIT License (c) 2026 Shohei Ohtaki · https://showheyohtaki.github.io/motion-prompt/#060 */
+.motion-indicator{position:absolute;left:0;z-index:0;pointer-events:none;transition:transform .25s cubic-bezier(.645,.045,.355,1),width .25s cubic-bezier(.645,.045,.355,1)}
+.motion-underline>.motion-indicator{bottom:2px;height:4px;border-radius:4px;background:var(--blue)}
+.motion-pill>.motion-indicator{top:0;height:100%;border-radius:inherit;background:#ececec;box-shadow:0 2px 8px rgba(40,50,76,.08)}
+.motion-pill>button,.motion-underline>.admin-tab,.motion-pill>button.active,.motion-pill>button.selected,.motion-underline>.admin-tab.active{position:relative;z-index:1;background:transparent;box-shadow:none}
+.motion-underline .admin-tab:after{display:none}
+
+/* Motion Prompt #074 · MIT License (c) 2026 Shohei Ohtaki · https://showheyohtaki.github.io/motion-prompt/#074 */
+.reveal{opacity:0;transform:translateY(28px);transition:opacity .7s cubic-bezier(.215,.61,.355,1),transform .7s cubic-bezier(.215,.61,.355,1)}
+.reveal.visible{opacity:1;transform:translateY(0)}
+.card.reveal{animation:none}
+.card.reveal.visible{opacity:1;transform:translateY(0)}
+
+/* Motion Prompt #081 · MIT License (c) 2026 Shohei Ohtaki · https://showheyohtaki.github.io/motion-prompt/#081 */
+.card{transition:transform .3s cubic-bezier(.215,.61,.355,1),box-shadow .3s cubic-bezier(.215,.61,.355,1)}
+.card:hover,.card:focus-within{transform:translateY(-10px);box-shadow:0 12px 22px rgba(28,35,51,.22)}
+.card.reveal.visible:hover,.card.reveal.visible:focus-within{transform:translateY(-10px);box-shadow:0 12px 22px rgba(28,35,51,.22)}
+.card.reveal:not(.visible):hover,.card.reveal:not(.visible):focus-within{transform:translateY(28px);box-shadow:0 2px 6px rgba(28,35,51,.08)}
+@media(hover:none){.card:hover,.card:focus-within,.card.reveal.visible:hover,.card.reveal.visible:focus-within{transform:none;box-shadow:0 2px 6px rgba(28,35,51,.08)}}
+
+/* Motion Prompt #086 · MIT License (c) 2026 Shohei Ohtaki · https://showheyohtaki.github.io/motion-prompt/#086 */
+.topbar nav .nav-link:not(.active):after,.sidebar-about:after{content:'';position:absolute;left:13px;right:13px;bottom:7px;height:3px;border-radius:3px;background:#5965c9;transform:scaleX(0);transform-origin:right;transition:transform .3s cubic-bezier(.215,.61,.355,1);pointer-events:none}
+.topbar nav .nav-link:not(.active):hover:after,.topbar nav .nav-link:not(.active):focus-visible:after,.sidebar-about:hover:after,.sidebar-about:focus-visible:after{transform:scaleX(1);transform-origin:left}
+.sidebar-about{position:relative}
+.sidebar-about:after{left:20px;right:20px;bottom:10px}
+
+/* Motion Prompt #166 · MIT License (c) 2026 Shohei Ohtaki · https://showheyohtaki.github.io/motion-prompt/#166 */
+.card-like,.detail-favorite{position:relative}
+.card-like>svg,.detail-favorite>svg{transition:transform .12s cubic-bezier(.215,.61,.355,1),fill .12s linear,color .12s linear}
+.card-like.saved>svg,.detail-favorite.saved>svg{color:#f23d5c;fill:#f23d5c}
+.save-pop>svg{animation:save-pop 1.2s both}
+.save-undo>svg{animation:save-undo .4s both}
+.save-pop>span{animation:save-count-in .3s cubic-bezier(.215,.61,.355,1) .05s both}
+.save-undo>span{animation:save-count-out .3s cubic-bezier(.215,.61,.355,1) .05s both}
+.save-burst{position:absolute;left:50%;top:50%;width:4px;height:4px;border-radius:50%;pointer-events:none;color:#f23d5c}
+.save-burst:before{content:'';position:absolute;left:-16px;top:-16px;width:32px;height:32px;border:2px solid currentColor;border-radius:50%;opacity:.5;animation:save-ring .5s cubic-bezier(.215,.61,.355,1) .08s both}
+.save-burst:after{content:'';position:absolute;inset:0;border-radius:50%;background:currentColor;box-shadow:-24px -14px 0 #ffb020,24px -14px 0 #ff5a2c,0 -27px 0 #f23d5c,0 27px 0 #ffb020,-24px 14px 0 #ff5a2c,24px 14px 0 #f23d5c;animation:save-particles .5s cubic-bezier(.215,.61,.355,1) .08s both}
+@keyframes save-pop{0%{transform:scale(.78)}10%{transform:scale(1.45)}12%{transform:scale(1.409)}20%{transform:scale(1.171)}35%{transform:scale(.954)}50%{transform:scale(1.017)}70%{transform:scale(.995)}100%{transform:scale(1)}}
+@keyframes save-undo{0%,100%{transform:scale(1)}50%{transform:scale(.84)}}
+@keyframes save-ring{from{transform:scale(.47);opacity:.5}to{transform:scale(1.03);opacity:0}}
+@keyframes save-particles{from{transform:scale(.65);opacity:1}to{transform:scale(1.45);opacity:0}}
+@keyframes save-count-in{from{transform:translateY(100%);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes save-count-out{from{transform:translateY(0);opacity:1}to{transform:translateY(-100%);opacity:0}}
+
+@media(prefers-reduced-motion:reduce){
+  .reveal{opacity:1;transform:none}
+  dialog[open],dialog[open]::backdrop,dialog.closing,dialog.closing::backdrop,.toast.show,.toast.show::after,.save-pop>svg,.save-undo>svg,.save-pop>span,.save-undo>span,.save-burst:before,.save-burst:after{animation:none}
+  .toast,.card,.admin-tab,.admin-tab:after,.topbar nav .nav-link:not(.active):after,.sidebar-about:after,.reveal,.motion-indicator{transition:none}
+  .card:hover,.card:focus-within{transform:none}
+}

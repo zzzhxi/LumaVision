@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { resolve, join, sep } from 'node:path';
+import { once } from 'node:events';
 import { emailDeliveryMode, sendAuthCode } from '../email.mjs';
 import { createAuthStore } from '../auth.mjs';
 import { HttpError } from '../storage.mjs';
+import { createApp } from '../server.mjs';
+import { proxyRequest } from './proxy-request.mjs';
 
 function preserveConfig(t) {
   const keys = ['RESEND_API_KEY', 'AUTH_EMAIL_FROM', 'AUTH_EMAIL_DEMO', 'AUTH_EMAIL_PROVIDER', 'GMAIL_USER', 'GMAIL_APP_PASSWORD'];
@@ -36,6 +39,31 @@ test('邮件发送：明确区分本地演示、未配置和真实发信，真�
   assert.deepEqual(delivered, { delivery: 'email' });
   await assert.rejects(sendAuthCode(input, { fetchImpl: async () => ({ ok: false, json: async () => ({ message: 'private-provider-error' }) }) }), error => error.status === 502 && !error.message.includes('private-provider-error'));
   await assert.rejects(sendAuthCode(input, { fetchImpl: async () => { throw new Error('network'); } }), { status: 502 });
+});
+
+test('公网入口缺少邮件服务时禁止演示验证码，即使环境要求演示', async t => {
+  preserveConfig(t);
+  process.env.AUTH_EMAIL_DEMO = 'true';
+  const parent = resolve('test-results');
+  await mkdir(parent, { recursive: true });
+  const storageRoot = await mkdtemp(join(parent, 'public-mail-test-'));
+  t.after(async () => { assert.ok(storageRoot.startsWith(parent + sep)); await rm(storageRoot, { recursive: true, force: true }); });
+  const publicOrigin = 'https://gallery.example.com';
+  const { server } = await createApp({ storageRoot, publicOrigin });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  try {
+    const url = `http://127.0.0.1:${server.address().port}`;
+    const headers = { Host: 'gallery.example.com', Origin: publicOrigin, 'Content-Type': 'application/json' };
+    const me = await proxyRequest(url + '/api/auth/me', { headers });
+    assert.equal(me.status, 200);
+    assert.equal((await me.json()).emailDelivery, 'unavailable');
+    const code = await proxyRequest(url + '/api/auth/code', { method: 'POST', headers, body: JSON.stringify({ email: 'deploy-probe' + '@' + 'qq.com' }) });
+    assert.equal(code.status, 503);
+    assert.deepEqual(Object.keys(await code.json()), ['error']);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
 });
 
 test('发信失败不创建账号、不使旧验证码失效；发送限流在存储中保留', async t => {

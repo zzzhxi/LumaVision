@@ -1,0 +1,25 @@
+[Unit]
+Description=LumaVision
+After=network.target
+
+[Service]
+Type=simple
+User=lumavision
+Group=lumavision
+WorkingDirectory=/opt/lumavision
+EnvironmentFile=/etc/lumavision/lumavision.env
+Environment=LUMA_STORAGE_ROOT=/var/lib/lumavision
+Environment=LUMA_FFMPEG=/usr/bin/ffmpeg
+ExecStart=/usr/local/bin/node /opt/lumavision/server.mjs
+StateDirectory=lumavision
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

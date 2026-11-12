@@ -61,7 +61,7 @@ await writeFile(join(target,'src/storage.mjs'),storage);
 await writeFile(join(target,'src/work-query.mjs'),await read('work-query.mjs'));
 let server=await read('server.mjs');
 let routes=server.slice(server.indexOf('      // ---- 账号'),server.indexOf("      if(!['GET','HEAD'].includes(req.method))"));
-routes=routes.replace('emailDeliveryMode()', 'emailDeliveryMode(env)');
+routes=routes.replace('emailDeliveryMode(mailOptions)', 'emailDeliveryMode(env)');
 routes=routes.replace(/      if\(path==='\/api\/user\/generations'[\s\S]*?(?=      const userPage=)/, "      if(path==='/api/user/generations'&&req.method==='GET'){await requireUser(req);json(res,200,{generations:[]});return;}\n");
 const uploadStart=routes.indexOf("      if(path==='/api/works'&&req.method==='POST')"),uploadEnd=routes.indexOf('      const withdrawAction=',uploadStart);
 routes=routes.slice(0,uploadStart)+`      if(path==='/api/works'&&req.method==='POST'){

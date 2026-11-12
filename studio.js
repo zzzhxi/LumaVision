@@ -6,5 +6,5 @@ export function studioItems({tab,drafts,generations,works,userId}){
   const results=generations.filter(item=>item.authorId===userId&&item.generated===true&&item.status==='succeeded'&&item.type==='image'&&item.media?.length);
   if(tab==='generations')return results;
   const ids=new Set(results.map(item=>item.id));
-  return works.filter(work=>work.authorId===userId&&work.uploaded&&work.status==='published'&&work.type==='image'&&ids.has(work.generationId)&&work.media?.some(media=>work.generationMediaIds?.includes(media.id)));
+  return works.filter(work=>work.authorId===userId&&work.uploaded&&work.status==='published'&&work.type==='image'&&ids.has(work.generationId)&&work.generationMediaIds?.length&&work.media?.length);
 }

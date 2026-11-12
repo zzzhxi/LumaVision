@@ -1,13 +1,13 @@
 import { HttpError } from './storage.mjs';
 import { gmailConfig, sendGmailCode } from './gmail.mjs';
 
-export function emailDeliveryMode() {
+export function emailDeliveryMode({ allowDemo = true } = {}) {
   const provider = process.env.AUTH_EMAIL_PROVIDER;
   if (provider && !['gmail', 'resend'].includes(provider)) return 'unavailable';
   if (provider === 'gmail' || (!provider && (process.env.GMAIL_USER || process.env.GMAIL_APP_PASSWORD))) return gmailConfig() ? 'email' : 'unavailable';
   if (process.env.RESEND_API_KEY && process.env.AUTH_EMAIL_FROM) return 'email';
   if (process.env.RESEND_API_KEY || process.env.AUTH_EMAIL_FROM) return 'unavailable';
-  return process.env.AUTH_EMAIL_DEMO === 'false' ? 'unavailable' : 'demo';
+  return !allowDemo || process.env.AUTH_EMAIL_DEMO === 'false' ? 'unavailable' : 'demo';
 }
 
 // The demo mode is explicit in the response and UI; it never claims that mail was sent.
@@ -18,8 +18,8 @@ const CODE_LABELS = {
   reset: '重置密码验证码'
 };
 
-export async function sendAuthCode({ email, code, challengeId, purpose = 'register' }, { fetchImpl = fetch, connectImpl, timeoutMs } = {}) {
-  const mode = emailDeliveryMode();
+export async function sendAuthCode({ email, code, challengeId, purpose = 'register' }, { fetchImpl = fetch, connectImpl, timeoutMs, allowDemo } = {}) {
+  const mode = emailDeliveryMode({ allowDemo });
   if (mode === 'demo') return { delivery: 'demo', devCode: code };
   if (mode !== 'email') throw new HttpError(503, '邮箱验证码发送尚未配置，请联系网站管理员。');
   const label = CODE_LABELS[purpose] || CODE_LABELS.register;

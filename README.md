@@ -12,6 +12,8 @@ node server.mjs
 
 打开 http://localhost:5173 。不需要安装依赖或构建。服务器只监听本机 127.0.0.1，不暴露工作文档。
 
+部署到 Linux 时，参考 [单机部署说明](deploy/README.md)。配置 `LUMA_PUBLIC_ORIGIN` 后，服务只接受指定的 HTTPS 来源与 Host、使用 Secure 会话 Cookie、关闭演示验证码，并只按 `ADMIN_EMAILS` 授予管理员权限；此时必须同时配置绝对路径 `LUMA_STORAGE_ROOT`，邮件凭据由服务环境变量提供，未配置时发码接口返回 503。本地模式仍沿用 `mail.local.json` 和原有回环限制。模板适用于域名根路径的独立 HTTPS 站点；部署在共享域名的子路径时，还需由 Nginx 统一改写首页资源、API 与媒体地址，不能直接套用独立站点配置。
+
 公开仓库只包含源码、静态资源、测试、脚本和构建配置。用户作品、账号会话、上传媒体、生成原图、私有邮件配置、运行日志、依赖缓存和构建产物不随仓库分发；部署站点与本地文件存储也不会自动同步。
 
 ## 功能
@@ -60,6 +62,7 @@ node server.mjs
 - `data/works/`：已上传的作品元数据；`data/media/`：上传原文件；`data/auth/`：用户与会话记录；`data/generations/`、`data/generated-media/`：私有生成记录与原图片。备份时应一起备份整个 `data/`。
 - `tests/uploads.test.mjs`、`tests/account.test.mjs`、`tests/withdrawn.test.mjs`、`tests/studio.test.mjs`、`tests/email.test.mjs`、`tests/gmail.test.mjs`：隔离目录内的上传、注册/登录/改密、图形验证码、邮件发送、账号权限、审核、作品下架与生成投稿来源回归测试。
 - `scripts/`、`tools/media/`：维护与迁移脚本、可选 FFmpeg 工具及许可说明；`docs/` 中的部署验收记录仅本地保留，不随仓库分发。
+- `deploy/`：空数据起步的 Debian/systemd/Nginx 部署模板与验收步骤；模板不包含凭据、用户数据或线上服务器身份。
 - `sites/` 与 `sites-current/`：两个历史账户各自的 Sites Worker 源码。`sites-current/` 是当前账户的私有部署源；部署身份保存在本机 gitignored 的 `.openai/hosting.json`，不随 GitHub 源码仓库分发。复用该身份，不要创建替代站点或覆盖线上数据。
 
 ## 账号与作品审核
@@ -91,11 +94,11 @@ $env:AUTH_EMAIL_DEMO = 'false'
 node server.mjs
 ```
 
-完全未配置邮件服务时本地 Node 服务默认启用演示：页面明确显示「未发送邮件」及演示验证码。设置 `AUTH_EMAIL_DEMO=false` 可关闭演示；配置不完整时返回未配置错误，不会退回演示。本机 Gmail 曾通过真实收信验收；Sites 生产环境使用已验证的 Resend 发件域名，禁用演示验证码，缺少发信配置时拒绝发码。配置完整时验证码仅发送到邮箱，API 不回传验证码；发送失败不会创建账号或使旧验证码失效。本地验证码只以哈希保存在 `data/auth/codes.json`。
+完全未配置邮件服务时本地 Node 服务默认启用演示：页面明确显示「未发送邮件」及演示验证码。设置 `AUTH_EMAIL_DEMO=false` 可关闭演示；配置不完整时返回未配置错误，不会退回演示。公网模式即使环境要求演示也不开放该回退，缺少发信配置时返回 503；Sites 生产环境使用已验证的 Resend 发件域名并禁用演示验证码。本机 Gmail 曾通过真实收信验收；配置完整时验证码仅发送到邮箱，API 不回传验证码；发送失败不会创建账号或使旧验证码失效。本地验证码只以哈希保存在 `data/auth/codes.json`。
 
 发布与修改作品需要登录。新发布和每次修改的作品都进入「待审核」，仅作者本人在「我的作品」可见（带状态徽标与驳回原因）；管理员在「管理后台 → 作品审核」页面通过或驳回，通过后作品公开展示，作者头像与昵称会链接到其个人主页。个人资料页可自定义昵称并维护社交主页链接，链接会展示在个人主页上。
 
-管理员规则：本地 Node 服务可让首个注册用户自动成为管理员，也可在启动前设置 `ADMIN_EMAILS`（逗号分隔邮箱）。Sites 版本只使用已有管理员角色或显式 `ADMIN_EMAILS`，不会因首位注册自动授予管理员权限。原账户的 Site 曾完成管理员邮箱替换；2026-09-30 当前账户的新私有 Site 按用户选择迁移本地副本，保留本地管理员身份及邮箱，未复制原线上邮箱替换状态。
+管理员规则：本地 Node 服务可让首个注册用户自动成为管理员，也可在启动前设置 `ADMIN_EMAILS`（逗号分隔邮箱）。配置 `LUMA_PUBLIC_ORIGIN` 的公网模式关闭首位注册自动提升，仅按名单授权；Sites 版本只使用已有管理员角色或显式 `ADMIN_EMAILS`，不会因首位注册自动授予管理员权限。原账户的 Site 曾完成管理员邮箱替换；2026-09-30 当前账户的新私有 Site 按用户选择迁移本地副本，保留本地管理员身份及邮箱，未复制原线上邮箱替换状态。
 
 ### 本地管理后台
 
@@ -148,6 +151,8 @@ node server.mjs
 
 已发布作品保存到网站磁盘，刷新页面、关闭浏览器或重启服务后仍保留。保存采用原子元数据替换；重复重试不会重复创建作品，过期编辑会报冲突。移除作品会隐藏记录并提供短时撤销，原文件暂不自动删除；修改时移除的旧附件也保留于磁盘。
 
+界面动效按 Motion Prompt 的 #049、#056、#057、#060、#074、#081、#086、#166 规格移植为站内 CSS/JS：覆盖弹窗、提示条、页签、筛选指示、卡片入场与悬浮、导航下划线和收藏反馈，保留原时长、缓动、MIT 署名与 `prefers-reduced-motion` 降级。创作台「我的投稿」按服务端验证的生成来源字段筛选；卡片接口保留 `generationMediaIds`，避免已审核投稿被漏掉。
+
 ## 产品边界
 
 本地 Node 和 Sites 的 Worker/D1/R2 版本各自维护认证和存储，推送 GitHub 源码不会同步或部署 Sites。现有 Sites 部署使用邮箱验证码登录；本文的本地邮箱密码注册、注册域名白名单、用户管理和生图服务尚未同步至 Sites。两个 Sites 的部署源和验收记录保留在本机。上传的视频可以直接播放；示例照片来自 Unsplash，示例视频卡片为静态分镜参考。
@@ -160,7 +165,7 @@ node server.mjs
 
 ## 验证
 
-`npm run check` 检查模块语法，`npm test` 运行 Node 回归测试。Windows 下若并发文件写入导致测试不稳定，可用 `node --test --test-concurrency=1` 串行运行。管理后台和注册白名单的专项回归可用 `node --test --test-concurrency=1 tests/admin-users.test.mjs tests/account.test.mjs`。
+`npm run check` 检查模块语法，`npm test` 运行 Node 回归测试。Windows 下若并发文件写入导致测试不稳定，可用 `node --test --test-concurrency=1` 串行运行。管理后台和注册白名单的专项回归可用 `node --test --test-concurrency=1 tests/admin-users.test.mjs tests/account.test.mjs`。`tests/proxy-request.mjs` 模拟 Nginx 到 Node 的 HTTP 请求，以保留真实 Host 头；账号与邮件测试据此覆盖公网来源、Secure Cookie、名单管理员和演示验证码关闭行为，创作台测试覆盖卡片投稿来源。
 
 以下日期记录保留当时的范围和结果；现行登录方式及 Sites 状态以本页前文和本地 `docs/sites-deployment-2026-09-30.md` 为准。
 

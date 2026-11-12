@@ -7,27 +7,30 @@ import { once } from 'node:events';
 import { createApp } from '../server.mjs';
 import { renderCaptcha, CAPTCHA_ALPHABET } from '../captcha.mjs';
 import { REGISTRATION_EMAIL_DOMAINS } from '../email-domains.js';
+import { proxyRequest } from './proxy-request.mjs';
 
 const parent=resolve('test-results');
 await mkdir(parent,{recursive:true});
 const picture=await readFile(new URL('../assets/aurora.jpg',import.meta.url));
 const CAPTCHA='ABC234',PASSWORD='Pass1234';
 
-async function setup(t,registrationEmailDomains=null){
+async function setup(t,registrationEmailDomains=null,appOptions={}){
   const dir=await mkdtemp(join(parent,'account-test-'));
   const codes=new Map();
-  const options={storageRoot:dir,sendAuthCode:async({email,code,purpose})=>{codes.set(email,code);codes.set(`${purpose}:${email}`,code);return {delivery:'email'};},captchaFactory:()=>({text:CAPTCHA,image:Buffer.from('captcha')}),registrationEmailDomains};
+  const options={storageRoot:dir,sendAuthCode:async({email,code,purpose})=>{codes.set(email,code);codes.set(`${purpose}:${email}`,code);return {delivery:'email'};},captchaFactory:()=>({text:CAPTCHA,image:Buffer.from('captcha')}),registrationEmailDomains,...appOptions};
   let app=await createApp(options);app.server.listen(0,'127.0.0.1');await once(app.server,'listening');
   const url=()=>`http://127.0.0.1:${app.server.address().port}`;
   t.after(async()=>{await new Promise(resolve=>app.server.close(resolve));const target=resolve(dir);assert.ok(target.startsWith(parent+sep)&&target.includes('account-test-'));await rm(target,{recursive:true,force:true});});
-  return {url,dir,codes,captcha:CAPTCHA,get auth(){return app.auth;},async restart(){await new Promise(resolve=>app.server.close(resolve));app=await createApp(options);app.server.listen(0,'127.0.0.1');await once(app.server,'listening');}};
+  const headers=options.publicOrigin?{Host:new URL(options.publicOrigin).host,Origin:options.publicOrigin}:{};
+  return {url,dir,codes,headers,captcha:CAPTCHA,get auth(){return app.auth;},async restart(){await new Promise(resolve=>app.server.close(resolve));app=await createApp(options);app.server.listen(0,'127.0.0.1');await once(app.server,'listening');}};
 }
 async function json(env,path,options={}){
   if(/^\/api\/admin\/works\/work-[0-9a-f-]{36}\/review$/.test(path)&&options.body?.expectedRevision===undefined){
     const id=path.split('/')[4],work=JSON.parse(await readFile(join(env.dir,'works',id+'.json'),'utf8'));
     options={...options,body:{...options.body,expectedRevision:work.revision}};
   }
-  const response=await fetch(env.url()+path,{method:options.method||'GET',headers:{'Content-Type':'application/json',...(options.headers||{})},body:options.body?JSON.stringify(options.body):undefined,redirect:'manual'});
+  const request=env.headers.Host?proxyRequest:fetch;
+  const response=await request(env.url()+path,{method:options.method||'GET',headers:{'Content-Type':'application/json',...env.headers,...options.headers},body:options.body?JSON.stringify(options.body):undefined,redirect:'manual'});
   return {status:response.status,body:await response.json().catch(()=>({})),headers:response.headers};
 }
 async function register(env,email,password=PASSWORD){
@@ -59,6 +62,32 @@ async function uploadWork(env,cookie,overrides={}){
   const response=await fetch(env.url()+'/api/works',{method:'POST',headers:{cookie},body:form});
   return {status:response.status,body:await response.json()};
 }
+
+test('公网模式按 HTTPS 来源校验请求、保护会话并只授予名单账号管理员权限',async t=>{
+  const publicOrigin='https://gallery.example.com',adminEmail='admin-prod@example.com',previous=process.env.ADMIN_EMAILS;
+  process.env.ADMIN_EMAILS=adminEmail;
+  t.after(()=>{if(previous===undefined)delete process.env.ADMIN_EMAILS;else process.env.ADMIN_EMAILS=previous;});
+  const env=await setup(t,undefined,{publicOrigin});
+  assert.equal((await json(env,'/api/auth/me')).status,200);
+  assert.equal((await json(env,'/api/auth/me',{headers:{Host:'localhost:5173','X-Forwarded-Host':'gallery.example.com'}})).status,403);
+  for(const origin of ['http://gallery.example.com','https://other.example.com','null']){
+    assert.equal((await json(env,'/api/auth/logout',{method:'POST',headers:{Origin:origin,'X-Forwarded-Proto':'https'}})).status,403);
+  }
+  const first=await register(env,'first-prod@example.com');
+  assert.equal(first.status,200);
+  assert.equal(first.body.user.role,'user');
+  const cookie=first.headers.get('set-cookie');
+  assert.match(cookie,/; Secure(?:;|$)/);
+  assert.equal((await json(env,'/api/admin/users',{headers:{cookie:cookie.split(';')[0]}})).status,403);
+  const admin=await register(env,adminEmail);
+  assert.equal(admin.status,200);
+  assert.equal(admin.body.user.role,'admin');
+  const adminCookie=admin.headers.get('set-cookie').split(';')[0];
+  assert.equal((await json(env,'/api/admin/users',{headers:{cookie:adminCookie}})).status,200);
+  const logout=await json(env,'/api/auth/logout',{method:'POST',headers:{cookie:adminCookie}});
+  assert.equal(logout.status,200);
+  assert.match(logout.headers.get('set-cookie'),/Max-Age=0; Secure/);
+});
 
 test('图形验证码字符表全部可绘制并输出 PNG',()=>{
   const png=renderCaptcha(CAPTCHA_ALPHABET);

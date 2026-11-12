@@ -34,10 +34,12 @@ async function post(env,record,actor='creator',overrides={}){
 test('创作台分类只收录本人真实生成记录与已公开图片投稿，不混入手动上传、草稿、未审核或他人作品',()=>{
   const generation={id:'generation-1',authorId:'user-1',generated:true,status:'succeeded',type:'image',media:[{id:'output'}]};
   const work={id:'published',authorId:'user-1',uploaded:true,status:'published',type:'image',generationId:generation.id,generationMediaIds:['copy'],media:[{id:'copy'}]};
-  const props={drafts:[{id:'draft'}],generations:[generation,{...generation,id:'other-result',authorId:'user-2'}],works:[work,{...work,id:'manual',generationId:null},{...work,id:'pending',status:'pending'},{...work,id:'rejected',status:'rejected'},{...work,id:'withdrawn',status:'withdrawn'},{...work,id:'other',authorId:'user-2'},{...work,id:'no-output',media:[{id:'manual'}]},{...work,id:'video',type:'video'}],userId:'user-1'};
+  const props={drafts:[{id:'draft'}],generations:[generation,{...generation,id:'other-result',authorId:'user-2'}],works:[work,{...work,id:'manual',generationId:null},{...work,id:'pending',status:'pending'},{...work,id:'rejected',status:'rejected'},{...work,id:'withdrawn',status:'withdrawn'},{...work,id:'other',authorId:'user-2'},{...work,id:'no-output',generationMediaIds:[],media:[{id:'manual'}]},{...work,id:'video',type:'video'}],userId:'user-1'};
   assert.deepEqual(studioItems({...props,tab:'drafts'}).map(p=>p.id),['draft']);
   assert.deepEqual(studioItems({...props,tab:'generations'}).map(p=>p.id),['generation-1']);
   assert.deepEqual(studioItems({...props,tab:'submissions'}).map(p=>p.id),['published']);
+  const card={...work,id:'card',cardOnly:true,generationMediaIds:['generated'],media:[{id:'manual-cover'}]};
+  assert.deepEqual(studioItems({...props,tab:'submissions',works:[...props.works,card]}).map(p=>p.id),['published','card']);
   assert.deepEqual(studioItems({...props,tab:'submissions',userId:null}),[]);
 });
 
@@ -68,6 +70,12 @@ test('投稿验证本人生成来源并复制图片；审核通过才收录，�
   assert.deepEqual(studioItems({tab:'submissions',drafts:[],generations:[record],works:[work],userId:work.authorId}),[]);
   const published=await env.app.store.review(work.id,{decision:'approve',expectedRevision:work.revision});
   assert.equal(studioItems({tab:'submissions',drafts:[],generations:[record],works:[published],userId:work.authorId}).length,1);
+  const cookie={cookie:env.users.creator.cookie};
+  const cards=(await (await fetch(env.url()+'/api/user/works?limit=100&cards=1&sort=updated',{headers:cookie})).json()).works;
+  const records=(await (await fetch(env.url()+'/api/user/generations',{headers:cookie})).json()).generations;
+  assert.equal(cards.length,1);
+  assert.deepEqual(cards[0].generationMediaIds,work.generationMediaIds);
+  assert.equal(studioItems({tab:'submissions',drafts:[],generations:records,works:cards,userId:work.authorId}).length,1);
   assert.equal((await fetch(env.url()+record.media[0].url)).status,404);
   const metadata={id:work.id,requestId:randomUUID(),revision:published.revision,title:'保留来源',prompt:work.prompt,model:work.model,category:work.category,ratio:work.ratio,type:'image',media:work.media.map(m=>({existing:m.id}))};
   const updated=await env.app.store.save(metadata,[],env.users.creator.user);assert.equal(updated.generationId,record.id);
