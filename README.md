@@ -38,6 +38,10 @@ node server.mjs
 - 我的作品状态筛选包含草稿、审核中、审核驳回、作品下架；作者可查看下架原因、编辑保存并保持下架、删除/撤销或重新提交审核。管理员可在后台清理已注销作者的下架作品；管理员下架自己的作品仍必填原因，下架后可作为作者管理。下架媒体保留既有作者/管理员读取规则。无归属历史作品公开时沿用登录用户管理规则，下架后不允许任意账号编辑或删除。
 - 可以粘贴提示词，也可以导入 `.txt` / `.md` 文本文件。
 - 响应式画廊、原生 dialog 焦点管理、Escape 关闭、`/` 聚焦搜索、减少动态效果偏好。
+- 画廊按作品 id 复用卡片节点：内容未变不重建，顺序变化只移动已有节点（`moveBefore`，不支持时回退 `insertBefore`），切换视图或分页时保留已加载图片、焦点与滚动位置。
+- 首屏两张封面优先加载（`loading="eager"` + `fetchpriority="high"`），详情主图提权，详情内相关推荐图降为 `fetchpriority="low"`，其余封面与缩略图按 `lazy` 调度。
+- 列表不再逐条播报，改由视觉隐藏的 `#gallery-status`（`role="status"`）一次性说明当前视图、数量与排序。
+- 弹窗使用声明式 `<dialog closedby="any">`，点击遮罩与 Escape 由浏览器直接轻量关闭；旧浏览器保留手动兜底。
 
 ## 文件
 
@@ -49,7 +53,7 @@ node server.mjs
 - `media.js`、`uploads.css`：多附件上传、预览及相册样式。
 - `data.js`：原创示例提示词。
 - `assets/`：本地参考照片；`sources.json` 保留原始来源 URL。
-- `server.mjs`：网站、账号/作品/审核 API 和视频 Range 读取服务。
+- `server.mjs`：网站、账号/作品/审核 API 和视频 Range 读取服务；对文本类响应（HTML/CSS/JS/SVG/JSON）按 `Accept-Encoding` 协商 Brotli 或 Gzip 压缩并回带 `Vary`，媒体二进制与 Range 响应不压缩。
 - `storage.mjs`：文件校验、磁盘持久化、版本冲突和重复请求处理。
 - `generation-service.mjs`、`generation-ui.js`：管理员生图配置、模型读取、Images API 调用与创作台生图交互。
 - `generations.mjs`：生成图片结果的内部持久化入口、账号私有记录与原图片读取。

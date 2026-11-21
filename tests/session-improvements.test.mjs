@@ -12,7 +12,7 @@ test('actual session functions clear private state and reject late responses in 
     let release;
     const response=new Promise(resolve=>release=resolve);
     const context={state,prompts:[],workMap:new Map(),workMapSources:[],sessionEpoch:0,detailSeq:0,pageSeq:0,adminUsersSeq:0,adminSearchTimer:null,generationSeq:0,gallerySeq:0,galleryKey:'private',galleryLoading:true,galleryHistory:['private'],galleryCursor:'private',galleryCurrentCursor:'private',galleryTotal:5,userCursor:'private',userHistory:['private'],userCurrentCursor:'private',currentPrompt:privateWork,editingRecord:privateWork,editingId:'private',removedDraft:privateWork,lastSubmission:privateWork,invalidateWorkReads(){},clearTimeout(){},
-      $(selector){if(!dialogs.has(selector))dialogs.set(selector,{open:false,innerHTML:'PRIVATE_SENTINEL',hidden:false});return dialogs.get(selector);},fetch:()=>response};
+      $(selector){if(!dialogs.has(selector))dialogs.set(selector,{open:false,innerHTML:'PRIVATE_SENTINEL',hidden:false,replaceChildren(){this.innerHTML='';}});return dialogs.get(selector);},fetch:()=>response};
     runInNewContext(extract('function findWork(id){','const SOCIAL_PLATFORMS')+extract('function clearPrivateSession(){','function invalidateWorkReads()')+extract('async function requestJson(url,options={}){','async function loadSession()'),context);
     assert.equal(context.findWork('work-private').prompt,'PRIVATE_SENTINEL');
     const reading=context.requestJson('/api/works/work-private');

@@ -2,7 +2,7 @@ export function createGenerationUI({ request, session, escape, toast, completed,
   const dialog = document.querySelector('#generation-settings');
   const running = new Set();
   let refreshCreator;
-  dialog.addEventListener('close', () => { dialog.innerHTML = ''; });
+  dialog.addEventListener('close', () => { dialog.replaceChildren(); });
   async function openSettings() {
     if (session().user?.role !== 'admin') return;
     const epoch = session().epoch;

@@ -288,11 +288,7 @@ export function createAuthDialog({ dialog, request, emailMode, onVerified, onAut
     if (busy) return;
     const button = event.target.closest('button');
     if (button?.matches('.auth-close')) { dialog.close(); return; }
-    if (event.target === dialog) {
-      const rect = dialog.getBoundingClientRect();
-      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close();
-      return;
-    }
+    // 点击遮罩关闭由 <dialog closedby="any"> 负责，旧浏览器走 app.js 的手动兜底。
     if (button?.dataset.authStep) {
       remember();
       draft.password = draft.confirm = draft.code = draft.captcha = '';

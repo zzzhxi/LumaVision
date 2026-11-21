@@ -139,9 +139,13 @@ function closeDialog(dialog){
   dialog.classList.add('closing');
   setTimeout(()=>{
     if(!dialog.classList.contains('closing'))return;
-    dialog.classList.remove('closing');
-    dialog.close();
+    finishDialogClose(dialog);
   },280);
+}
+function finishDialogClose(dialog){
+  if(!dialog||!dialog.open)return;
+  dialog.classList.remove('closing');
+  dialog.close();
 }
 let uploader=null, publishing=false, editingRecord=null, uploadId=null, lastSubmission=null, activeMedia=0;
 let sessionPromise=null, pageSeq=0, myWorksSeq=0, publicWorksSeq=0;
@@ -188,7 +192,7 @@ function clearPrivateSession(){
   state.reviewTotal=0;state.userWorksTotal=0;userCursor=null;userHistory=[];userCurrentCursor=null;
   currentPrompt=null;editingRecord=null;editingId=null;removedDraft=null;lastSubmission=null;
   for(const id of ['detail','editor','creator','reject','confirm','profile','password','generation-settings','admin-user']){const dialog=$('#'+id);if(dialog?.open)dialog.close();}
-  $('#detail').innerHTML='';$('#page-view').innerHTML='';$('#studio-status').hidden=true;
+  $('#detail').replaceChildren();$('#page-view').replaceChildren();$('#studio-status').hidden=true;
   workMap.clear();workMapSources=[];
 }
 function invalidateWorkReads(){myWorksSeq++;publicWorksSeq++;}
@@ -916,31 +920,33 @@ function openReject(id,type='work'){
     if(isCreator)creatorDecide(id,'reject',note);else reviewDecide(id,'reject',note);
   });
 }
-function cardMedia(p){
+function cardMedia(p,priority=''){
   const cover=p.media?.[0];
-  if(cover?.thumbnailUrl)return `<img src="${escape(cover.thumbnailUrl)}" srcset="${escape(cover.thumbnailSmall)} 320w, ${escape(cover.thumbnailUrl)} 640w, ${escape(cover.thumbnailLarge)} 1280w" sizes="(max-width:580px) 48vw, (max-width:1000px) 30vw, 24vw" alt="${escape(p.title)}作品封面" loading="lazy" decoding="async">`;
-  if(cover)return cover.type==='video'?`<div class="draft-text-preview"><p>${icon('video')}</p><small>点击查看视频</small></div>`:'<img src="'+escape(cover.url)+'" alt="'+escape(p.title)+'作品封面" loading="lazy" decoding="async">';
+  // 详情内推荐图属于交互后才出现的次要资源，降优先级并延迟加载；封面统一保持 lazy，首屏提权由 applyImagePriority 单独处理。
+  const load=priority==='low'?' loading="lazy" fetchpriority="low"':' loading="lazy"';
+  if(cover?.thumbnailUrl)return `<img src="${escape(cover.thumbnailUrl)}" srcset="${escape(cover.thumbnailSmall)} 320w, ${escape(cover.thumbnailUrl)} 640w, ${escape(cover.thumbnailLarge)} 1280w" sizes="(max-width:580px) 48vw, (max-width:1000px) 30vw, 24vw" alt="${escape(p.title)}作品封面"${load} decoding="async">`;
+  if(cover)return cover.type==='video'?`<div class="draft-text-preview"><p>${icon('video')}</p><small>点击查看视频</small></div>`:'<img src="'+escape(cover.url)+'" alt="'+escape(p.title)+'作品封面"'+load+' decoding="async">';
   if(p.custom){
     const preview=draftPreview(p,allPrompts().concat(state.myWorks));
-    return preview?`<img src="${escape(preview.url)}" alt="${escape(p.title)}的${preview.label}" loading="lazy" decoding="async">`:`<div class="draft-text-preview"><p>${escape(p.prompt)}</p><small>文字草稿 · 暂无图片</small></div>`;
+    return preview?`<img src="${escape(preview.url)}" alt="${escape(p.title)}的${preview.label}"${load} decoding="async">`:`<div class="draft-text-preview"><p>${escape(p.prompt)}</p><small>文字草稿 · 暂无图片</small></div>`;
   }
-  return '<img src="'+escape(p.image)+'" alt="'+escape(p.subtitle)+'，视觉参考图" loading="lazy" decoding="async">';
+  return '<img src="'+escape(p.image)+'" alt="'+escape(p.subtitle)+'，视觉参考图"'+load+' decoding="async">';
 }
 function draftDetailMedia(p){
   const preview=draftPreview(p,allPrompts().concat(state.myWorks));
-  return preview?`<img class="detail-image" src="${escape(preview.url)}" alt="${escape(p.title)}的${preview.label}">`:`<div class="draft-no-image">${icon('edit')}<p>文字草稿</p><small>尚未关联图片</small></div>`;
+  return preview?`<img class="detail-image" src="${escape(preview.url)}" alt="${escape(p.title)}的${preview.label}" fetchpriority="high">`:`<div class="draft-no-image">${icon('edit')}<p>文字草稿</p><small>尚未关联图片</small></div>`;
 }
 function attachmentGallery(p){
   const multi=p.media.length>1;
   return '<div class="gallery-stage"></div>'
-    +(multi?'<button class="gallery-arrow gallery-arrow-prev" data-action="media-prev" aria-label="上一个附件">‹</button><button class="gallery-arrow gallery-arrow-next" data-action="media-next" aria-label="下一个附件">›</button><div class="gallery-thumbnails">'+p.media.map((m,i)=>'<button class="gallery-thumb" data-media-index="'+i+'" aria-label="查看第 '+(i+1)+' 个'+(m.type==='video'?'视频':'图片')+'">'+(m.type==='video'?(m.thumbnailSmall?'<img src="'+escape(m.thumbnailSmall)+'" alt="">':'<span>视频</span>'):'<img src="'+escape(m.thumbnailSmall||m.url)+'" alt="">')+'</button>').join('')+'</div>':'')
+    +(multi?'<button class="gallery-arrow gallery-arrow-prev" data-action="media-prev" aria-label="上一个附件">‹</button><button class="gallery-arrow gallery-arrow-next" data-action="media-next" aria-label="下一个附件">›</button><div class="gallery-thumbnails">'+p.media.map((m,i)=>'<button class="gallery-thumb" data-media-index="'+i+'" aria-label="查看第 '+(i+1)+' 个'+(m.type==='video'?'视频':'图片')+'">'+(m.type==='video'?(m.thumbnailSmall?'<img src="'+escape(m.thumbnailSmall)+'" alt="" loading="lazy" decoding="async">':'<span>视频</span>'):'<img src="'+escape(m.thumbnailSmall||m.url)+'" alt="" loading="lazy" decoding="async">')+'</button>').join('')+'</div>':'')
     +'<p class="gallery-caption">上传作品 · '+p.media.length+' 个附件</p>';
 }
 function showMedia(index){
   if(!currentPrompt?.media?.length)return;const media=currentPrompt.media;activeMedia=(index+media.length)%media.length;
   const item=media[activeMedia],stage=$('#detail .gallery-stage');if(!stage)return;
   stage.querySelectorAll('video').forEach(video=>{video.pause();video.removeAttribute('src');video.load();});
-  stage.innerHTML=item.type==='video'?'<video controls playsinline preload="metadata" src="'+escape(item.url)+'" aria-label="'+escape(item.name)+'"></video>':'<img src="'+escape(item.url)+'" alt="'+escape(currentPrompt.title)+'，第 '+(activeMedia+1)+' 张图片">';
+  stage.innerHTML=item.type==='video'?'<video controls playsinline preload="metadata" src="'+escape(item.url)+'" aria-label="'+escape(item.name)+'"></video>':'<img src="'+escape(item.url)+'" alt="'+escape(currentPrompt.title)+'，第 '+(activeMedia+1)+' 张图片" fetchpriority="high">';
   const position=$('#media-position');if(position)position.textContent=(activeMedia+1)+' / '+media.length;
   $('#detail').querySelectorAll('[data-media-index]').forEach(button=>{const active=Number(button.dataset.mediaIndex)===activeMedia;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
   const download=$('#detail .detail-download');if(download)download.href=item.url;
@@ -994,10 +1000,102 @@ function workControls(p){
   if(p.status==='draft'||p.status==='withdrawn')return edit+`<button data-work-delete="${escape(p.id)}" data-tooltip="删除作品" aria-label="删除${escape(p.title)}">${icon('x')}</button>`;
   return edit+`<button data-work-withdraw="${escape(p.id)}" data-tooltip="下架作品" aria-label="下架${escape(p.title)}">${icon('withdraw')}</button>`;
 }
-function cardHtml(p){
+function cardMarkup(p){
   const draftClass=p.status==='draft'?' publishing-draft':p.custom&&!p.uploaded?' draft-card':'';
   const badge=p.custom?(p.uploaded?statusBadge(p):'<span class="draft-badge">草稿</span>'):`<span class="card-likes" title="示例热度">${icon('heart')}${p.likes+(state.saved.has(p.id)?1:0)}</span>`;
-  return `<article class="card${draftClass}${p.uploaded?' own-work':''}" data-id="${escape(p.id)}"><div class="card-visual" style="--card-color:${/^#[0-9a-f]{6}$/i.test(p.color)?p.color:'#a6b3c5'}"><button class="card-open" data-open="${escape(p.id)}" aria-label="查看${escape(p.title)}提示词">${cardMedia(p)}</button><span class="card-tag">${p.generated?'生成记录':p.status==='withdrawn'?'已下架':p.uploaded?(p.media?.some(m=>m.type==='video')?icon('video')+' 视频作品':'上传作品'):p.type==='video'?icon('video')+' 视频分镜':p.custom?'我的创作':escape(p.category)}</span>${p.type==='video'&&(!p.custom||p.media?.some(media=>media.type==='video'))?`<span class="play-circle">${icon('play')}</span>`:''}<span class="card-model"><span class="model-dot"></span>${escape(p.model)}</span>${p.media?.length?`<span class="media-count">${p.mediaCount||p.media.length} 个附件</span>`:p.duration?`<span class="card-duration">${escape(p.duration)}</span>`:''}</div><div class="card-meta"><div class="card-title-row"><h3 class="card-title"><button data-open="${escape(p.id)}">${escape(p.title)}</button></h3>${badge}</div><p class="card-subtitle">${escape(p.subtitle)}</p></div></article>`;
+  const author=p?.authorProfile||(p?.authorId&&p.authorId===state.user?.id?state.user:{id:p?.authorId||p?.id,nickname:p?.author||(p?.custom?'我':'Luma Studio')});
+  const social=creatorSocial(author.social);
+  const authorName=escape(author.nickname);
+  const authorNote=social?.handle||(p?.generated?'生成记录':p?.status==='draft'?'发布草稿':p?.custom&&!p.uploaded?'创作草稿':p?.uploaded?social?.name||'':p?.category);
+  const authorInfo=`${avatarHtml(author,30)}<span class="card-author-copy"><strong>${authorName}</strong>${authorNote?`<small title="${escape(authorNote)}">${escape(authorNote)}</small>`:''}</span>`;
+  const authorControl=p?.authorId?`<button class="card-author" data-author="${escape(p.authorId)}" data-tooltip="查看作者" aria-label="查看${authorName}的主页">${authorInfo}</button>`:`<span class="card-author">${authorInfo}</span>`;
+  const saved=state.saved.has(p.id),saveLabel=saved?'取消收藏':'收藏作品';
+  const socialControl=social?`<a class="card-social" href="${escape(social.url)}" target="_blank" rel="noopener noreferrer" data-tooltip="在 ${social.name} 上查看" aria-label="在 ${social.name} 上查看${authorName}的主页">${social.key==='x'?'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h4l12 18h-4zM20 3 4 21"/></svg>':`<span class="card-platform">${escape(social.name)}</span>${icon('arrow-up-right')}`}</a>`:'';
+  const management=p?.generated?`<button data-publish-generation="${escape(p.id)}" data-tooltip="投稿到灵感库" aria-label="投稿${escape(p.title)}到灵感库">${icon('arrow-up-right')}</button><button data-generation-delete="${escape(p.id)}" data-tooltip="删除生成记录" aria-label="删除${escape(p.title)}">${icon('x')}</button>`:p?.uploaded?workControls(p):p?.custom?`<button data-creative-edit="${escape(p.id)}" data-tooltip="编辑草稿" aria-label="编辑${escape(p.title)}">${icon('edit')}</button><button data-creative-delete="${escape(p.id)}" data-tooltip="删除草稿" aria-label="移除${escape(p.title)}">${icon('x')}</button>`:'';
+  const likeControl=p?.generated?'':`<button class="card-like ${saved?'saved':''}" data-save="${escape(p.id)}" data-tooltip="${saveLabel}" aria-label="${saved?'取消收藏':'收藏'}${escape(p.title)}" aria-pressed="${saved}">${icon('heart')}<span>${Number(p.likes||0)+(saved?1:0)}</span></button>`;
+  const quick=`<div class="card-quick-actions">${authorControl}<div class="card-action-row"><button class="card-use" data-apply="${escape(p.id)}" data-tooltip="使用创意" aria-label="使用创意">${icon('sparkles')}使用创意</button><div class="card-controls">${likeControl}${socialControl}${management}</div></div></div>`;
+  const withdrawn=p?.status==='withdrawn'&&p.withdrawnNote;
+  const visual=`<div class="card-visual" style="--card-color:${/^#[0-9a-f]{6}$/i.test(p.color)?p.color:'#a6b3c5'}"><button class="card-open" data-open="${escape(p.id)}" aria-label="查看${escape(p.title)}提示词">${cardMedia(p)}</button><span class="card-tag">${p.generated?'生成记录':p.status==='withdrawn'?'已下架':p.uploaded?(p.media?.some(m=>m.type==='video')?icon('video')+' 视频作品':'上传作品'):p.type==='video'?icon('video')+' 视频分镜':p.custom?'我的创作':escape(p.category)}</span>${p.type==='video'&&(!p.custom||p.media?.some(media=>media.type==='video'))?`<span class="play-circle">${icon('play')}</span>`:''}<span class="card-model"><span class="model-dot"></span>${escape(p.model)}</span>${p.media?.length?`<span class="media-count">${p.mediaCount||p.media.length} 个附件</span>`:p.duration?`<span class="card-duration">${escape(p.duration)}</span>`:''}${withdrawn?quick:''}</div>`;
+  const meta=`<div class="card-meta"><div class="card-title-row"><h3 class="card-title"><button data-open="${escape(p.id)}">${escape(p.title)}</button></h3>${badge}</div><p class="card-subtitle">${escape(p.subtitle)}</p></div>`;
+  return `<article class="card${draftClass}${p.uploaded?' own-work':''}" data-id="${escape(p.id)}">${visual}${meta}${withdrawn?`<p class="withdrawn-note">下架原因：${escape(p.withdrawnNote)}</p>`:quick}</article>`;
+}
+const cardNodes=new Map(),cardMarks=new Map();
+function hydrateCard(card,p){
+  card.draggable=false;
+  const open=card.querySelector('.card-open');
+  if(open)open.draggable=false;
+  card.querySelectorAll('img,video').forEach(media=>{media.draggable=false;});
+  card.style.setProperty('--tile-ratio','3 / 4');
+  if(p?.type==='video')card.style.setProperty('--tile-ratio','16 / 9');
+  const image=card.querySelector('.card-open img');
+  if(image){
+    const fit=()=>{if(image.naturalWidth&&image.naturalHeight)card.style.setProperty('--tile-ratio',String(Math.max(.5,Math.min(1.6,image.naturalWidth/image.naturalHeight))));};
+    image.addEventListener('load',fit,{once:true});
+    if(image.complete)fit();
+  }
+  card.querySelectorAll('img').forEach(img=>img.addEventListener('error',()=>img.closest('.card-visual')?.classList.add('image-failed'),{once:true}));
+}
+function createCard(markup,p,index){
+  const template=document.createElement('template');
+  template.innerHTML=markup;
+  const card=template.content.firstElementChild;
+  card.classList.add('reveal');
+  const delay=`${Math.min(index,7)*40}ms`;
+  card.style.setProperty('--reveal-delay',delay);
+  card.style.transitionDelay=delay;
+  hydrateCard(card,p);
+  return card;
+}
+// 首屏封面是最可能的 LCP 候选，优先加载；其余封面保持浏览器默认的 lazy 调度。
+function applyImagePriority(card,index){
+  card.querySelectorAll('.card-open img').forEach(img=>{
+    if(index<2){img.loading='eager';img.fetchPriority='high';}
+    else{img.loading='lazy';img.fetchPriority='';}
+  });
+}
+// 只移动真正错位的节点，保留已有节点的图片、焦点与动画状态。
+function syncCardOrder(container,nodes){
+  let anchor=container.firstChild;
+  for(const node of nodes){
+    if(node===anchor){anchor=anchor.nextSibling;continue;}
+    if(typeof container.moveBefore==='function')container.moveBefore(node,anchor);
+    else container.insertBefore(node,anchor);
+  }
+}
+// 画廊按 id 复用卡片节点：内容未变就不重建，顺序变化只移动已有节点，图片与焦点状态得以保留。
+function renderGallery(items){
+  const container=$('#cards'),desired=[],keep=new Set();
+  for(const [index,item] of items.entries()){
+    keep.add(item.id);
+    const markup=cardMarkup(item);
+    let node=cardNodes.get(item.id);
+    if(!node||cardMarks.get(item.id)!==markup){
+      const next=createCard(markup,item,index);
+      if(node)node.replaceWith(next);else container.appendChild(next);
+      node=next;
+      cardNodes.set(item.id,node);
+      cardMarks.set(item.id,markup);
+    }
+    applyImagePriority(node,index);
+    desired.push(node);
+  }
+  for(const [id,node] of [...cardNodes]){
+    if(keep.has(id))continue;
+    node.remove();
+    cardNodes.delete(id);
+    cardMarks.delete(id);
+  }
+  syncCardOrder(container,desired);
+}
+// 列表本身不再逐条播报，改由状态区一次性说明结果。
+function announceGallery(items){
+  const status=$('#gallery-status');
+  if(!status)return;
+  const unit=state.view==='drafts'?({drafts:'份草稿',generations:'条生成记录',submissions:'件投稿'}[state.studioTab]):state.view==='creations'?'件作品':'个灵感';
+  const scope=({explore:'探索灵感',collections:'我的收藏',recent:'最近更新',creations:'我的作品',drafts:'创作台'})[state.view]||'';
+  const order=({featured:'精选',newest:'最新',popular:'最热'})[state.sort];
+  const message=`${scope?scope+'：':''}共 ${items.length} ${unit}${order&&['explore','recent','collections'].includes(state.view)?'，按'+order+'排序':''}`;
+  if(status.textContent!==message)status.textContent=message;
 }
 function render() {
   refreshGallery();
@@ -1011,10 +1109,11 @@ function render() {
   document.querySelectorAll('[data-studio-tab]').forEach(button=>{const active=button.dataset.studioTab===state.studioTab;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
   $('#studio-status').hidden=!state.generationError||state.view!=='drafts'||state.studioTab==='drafts';
   $('.category-list').innerHTML=categories.map(cat=>`<button data-category="${escape(cat)}" class="${cat===state.category?'active':''}" aria-pressed="${cat===state.category}">${escape(cat)}</button>`).join('');
-  $('#cards').innerHTML=items.map((item,index)=>cardHtml(item).replace('<article class="card',`<article style="--reveal-delay:${Math.min(index,7)*40}ms" class="card reveal`)).join('');
+  renderGallery(items);
   let pager=$('#gallery-pager');if(!pager){pager=document.createElement('div');pager.id='gallery-pager';pager.className='gallery-pager';$('#cards').after(pager);}
   pager.hidden=!galleryEndpoint()||(state.view==='creations'&&!state.user);pager.innerHTML=!pager.hidden?`<button class="button soft" data-action="gallery-prev" ${!galleryHistory.length||galleryLoading?'disabled':''}>上一页</button><span>${galleryLoading?'正在加载…':`第 ${galleryHistory.length+1} 页 · ${galleryTotal} 件上传作品`}</span><button class="button soft" data-action="gallery-next" ${!galleryCursor||galleryLoading?'disabled':''}>下一页</button>`:'';
   $('#result-count').textContent=state.view==='drafts'?`${items.length} ${ {drafts:'份草稿',generations:'条生成记录',submissions:'件投稿'}[state.studioTab]}`:`${items.length} 个灵感`;
+  announceGallery(items);
   const savedCount=allPrompts().filter(p=>state.saved.has(p.id)).length;$('#saved-count').textContent=savedCount?savedCount:'';
   $('#empty').hidden=items.length>0;
   if(!items.length){$('#empty h3').textContent=state.view==='collections'&&!state.query?'把喜欢的灵感，留在这里':state.view==='creations'?'展示你的第一件作品':state.view==='recent'?'还没有上传过作品':state.view==='drafts'?'从你的第一份提示词开始':'还没有找到这份灵感';$('#empty p').textContent=state.view==='collections'?'点击作品上的收藏按钮，留下喜欢的灵感。':state.view==='creations'?(state.user?.accountType==='creator'?'点击右上角「发布作品」，上传已经完成的图片或视频。':state.user?'可在个人资料中申请创作者，通过后发布自己的作品。':'登录后查看自己的作品，创作者账号还可以发布作品。'):state.view==='recent'?'发布图片或视频后，最新上传的内容会出现在这里。':state.view==='drafts'?'点击右上角「开始创作」，编辑提示词并保存草稿。':'换一个关键词，或清除筛选重新探索。';}
@@ -1029,33 +1128,6 @@ function render() {
     $('#empty h3').textContent=filtered?'没有符合筛选的'+studioTabs[state.studioTab]:empty[0];$('#empty p').textContent=filtered?'清除筛选，查看当前分类的全部内容。':empty[1];
   }
   document.querySelectorAll('[data-view]').forEach(b=>{b.classList.toggle('active',b.dataset.view===state.view); if(b.dataset.view===state.view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});
-  $('#cards').querySelectorAll('img').forEach(img=>img.addEventListener('error',()=>img.closest('.card-visual').classList.add('image-failed'),{once:true}));
-  $('#cards').querySelectorAll('.card').forEach((card,index)=>{
-    card.draggable=false;
-    card.querySelector('.card-open').draggable=false;
-    card.querySelectorAll('img,video').forEach(media=>media.draggable=false);
-    card.style.setProperty('--tile-ratio', '3 / 4');
-    const p=findWork(card.dataset.id);
-    if(p?.type==='video')card.style.setProperty('--tile-ratio','16 / 9');
-    const image=card.querySelector('.card-open img');if(image){const fit=()=>{if(image.naturalWidth&&image.naturalHeight)card.style.setProperty('--tile-ratio',String(Math.max(.5,Math.min(1.6,image.naturalWidth/image.naturalHeight))));};image.addEventListener('load',fit,{once:true});if(image.complete)fit();}
-    const author=p?.authorProfile||(p?.authorId&&p.authorId===state.user?.id?state.user:{id:p?.authorId||p?.id,nickname:p?.author||(p?.custom?'我':'Luma Studio')});
-    const social=creatorSocial(author.social);
-    const authorName=escape(author.nickname);
-    const authorNote=social?.handle||(p?.generated?'生成记录':p?.status==='draft'?'发布草稿':p?.custom&&!p.uploaded?'创作草稿':p?.uploaded?social?.name||'':p?.category);
-    const authorInfo=`${avatarHtml(author,30)}<span class="card-author-copy"><strong>${authorName}</strong>${authorNote?`<small title="${escape(authorNote)}">${escape(authorNote)}</small>`:''}</span>`;
-    const authorControl=p?.authorId?`<button class="card-author" data-author="${escape(p.authorId)}" data-tooltip="查看作者" aria-label="查看${authorName}的主页">${authorInfo}</button>`:`<span class="card-author">${authorInfo}</span>`;
-    const saved=state.saved.has(p.id),saveLabel=saved?'取消收藏':'收藏作品';
-    const socialControl=social?`<a class="card-social" href="${escape(social.url)}" target="_blank" rel="noopener noreferrer" data-tooltip="在 ${social.name} 上查看" aria-label="在 ${social.name} 上查看${authorName}的主页">${social.key==='x'?'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h4l12 18h-4zM20 3 4 21"/></svg>':`<span class="card-platform">${escape(social.name)}</span>${icon('arrow-up-right')}`}</a>`:'';
-    const management=p?.generated?`<button data-publish-generation="${escape(p.id)}" data-tooltip="投稿到灵感库" aria-label="投稿${escape(p.title)}到灵感库">${icon('arrow-up-right')}</button><button data-generation-delete="${escape(p.id)}" data-tooltip="删除生成记录" aria-label="删除${escape(p.title)}">${icon('x')}</button>`:p?.uploaded?workControls(p):p?.custom?`<button data-creative-edit="${escape(p.id)}" data-tooltip="编辑草稿" aria-label="编辑${escape(p.title)}">${icon('edit')}</button><button data-creative-delete="${escape(p.id)}" data-tooltip="删除草稿" aria-label="移除${escape(p.title)}">${icon('x')}</button>`:'';
-    card.insertAdjacentHTML('beforeend',`<div class="card-quick-actions">${authorControl}<div class="card-action-row"><button class="card-use" data-apply="${escape(p.id)}" data-tooltip="使用创意" aria-label="使用创意">${icon('sparkles')}使用创意</button><div class="card-controls"><button class="card-like ${saved?'saved':''}" data-save="${escape(p.id)}" data-tooltip="${saveLabel}" aria-label="${saved?'取消收藏':'收藏'}${escape(p.title)}" aria-pressed="${saved}">${icon('heart')}<span>${Number(p.likes||0)+(saved?1:0)}</span></button>${socialControl}${management}</div></div></div>`);
-  });
-  $('#cards').querySelectorAll('.card').forEach(card=>{
-    const work=findWork(card.dataset.id);if(work?.generated)card.querySelector('.card-like')?.remove();
-    if(work?.status==='withdrawn'&&work.withdrawnNote){
-      card.querySelector('.card-visual').append(card.querySelector('.card-quick-actions'));
-      card.insertAdjacentHTML('beforeend',`<p class="withdrawn-note">下架原因：${escape(work.withdrawnNote)}</p>`);
-    }
-  });
   document.querySelectorAll('[data-model]').forEach(button=>{const active=button.dataset.model===state.model;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
   document.querySelectorAll('[data-sort]').forEach(button=>{const active=button.dataset.sort===state.sort;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
   document.querySelectorAll('[data-work-status]').forEach(button=>{const active=button.dataset.workStatus===state.workStatus;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
@@ -1093,6 +1165,9 @@ function toggleSave(id) {
     playSaveFeedback(button,saved);
   });
   $('#saved-count').textContent=state.saved.size||'';
+  // 收藏状态已就地更新，同步缓存的卡片标记，避免下次渲染重建这张卡片。
+  const marked=findWork(id);
+  if(marked)cardMarks.set(id,cardMarkup(marked));else cardMarks.delete(id);
   if(state.view==='collections'){galleryKey='';render();}
   if($('#detail').open&&currentPrompt?.id===id){updateDetailSave();playSaveFeedback($('#detail [data-detail-save]'),saved);}
   toast(saved?'已收藏，在「我的收藏」中查看':'已取消收藏');
@@ -1126,6 +1201,9 @@ async function openPrompt(id){
   if(p.status==='withdrawn')$('#detail .viewer-caption').textContent='已下架'+(p.withdrawnNote?' · 下架原因：'+p.withdrawnNote:'')+' · 仅创作者本人可以操作';
   const backdrop=p.media?.find(item=>item.kind==='image'||item.type==='image')?.url||(!p.custom?p.image:null);
   if(backdrop)$('#detail .detail-viewer').style.setProperty('--preview-image',`url("${backdrop}")`);
+  // 详情主图是打开弹窗后的 LCP 候选，优先加载；相关推荐图延后并降优先级。
+  $('#detail').querySelectorAll('.detail-image').forEach(img=>{img.fetchPriority='high';});
+  $('#detail').querySelectorAll('.related-grid img').forEach(img=>{img.loading='lazy';img.fetchPriority='low';});
   if(!p.generated)updateDetailSave();if(!$('#detail').open)$('#detail').showModal();if(p.media?.length)showMedia(0);
   activateReveals($('#detail'));
   setupMotionIndicators($('#detail'));
@@ -1352,7 +1430,10 @@ document.addEventListener('keydown',event=>{
   const next=tabs[(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length];
   event.preventDefault();next.focus();goAdmin(next.dataset.adminTab);
 });
-document.querySelectorAll('dialog').forEach(dialog=>dialog.addEventListener('click',event=>{if(event.target===dialog&&!(dialog.id==='editor'&&publishing)&&!(dialog.id==='auth'&&authDialog.busy)){const r=dialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)closeDialog(dialog);}}));
+// 支持 closedby 的浏览器用 <dialog closedby="any"> 声明式轻量关闭；旧浏览器保留手动兜底。
+if(!('closedBy' in HTMLDialogElement.prototype)){
+  document.querySelectorAll('dialog').forEach(dialog=>dialog.addEventListener('click',event=>{if(event.target===dialog&&!(dialog.id==='editor'&&publishing)&&!(dialog.id==='auth'&&authDialog.busy)){const r=dialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)closeDialog(dialog);}}));
+}
 document.querySelectorAll('dialog').forEach(dialog=>{
   dialog.addEventListener('cancel',event=>{
     if(reduceMotion.matches||dialog.classList.contains('closing')||(dialog.id==='editor'&&publishing)||(dialog.id==='auth'&&authDialog.busy))return;
@@ -1406,8 +1487,8 @@ setView(initialView);
 if(location.hash.startsWith('#prompt/')||location.hash.startsWith('#user/')||initialAdmin||initialHash==='review')route();
 if(storageIssue)toast('部分本地数据无法读取；你仍可浏览和导出提示词。');
 
-$('#detail').addEventListener('close',()=>{if($('#detail').open)return;detailSeq++;$('#detail').querySelectorAll('video').forEach(video=>{video.pause();video.removeAttribute('src');video.load();});$('#detail').innerHTML='';currentPrompt=null;if(location.hash.startsWith('#prompt/'))history.replaceState(null,'','#'+detailReturnHash);});
-$('#creator').addEventListener('close',()=>{if($('#creator').open)return;creativeSession++;creativeRefs.forEach(ref=>{if(ref.file)URL.revokeObjectURL(ref.url);});creativeRefs=[];creativePreview=null;$('#creator').innerHTML='';});
+$('#detail').addEventListener('close',()=>{if($('#detail').open)return;detailSeq++;$('#detail').querySelectorAll('video').forEach(video=>{video.pause();video.removeAttribute('src');video.load();});$('#detail').replaceChildren();currentPrompt=null;if(location.hash.startsWith('#prompt/'))history.replaceState(null,'','#'+detailReturnHash);});
+$('#creator').addEventListener('close',()=>{if($('#creator').open)return;creativeSession++;creativeRefs.forEach(ref=>{if(ref.file)URL.revokeObjectURL(ref.url);});creativeRefs=[];creativePreview=null;$('#creator').replaceChildren();});
 $('#editor').addEventListener('cancel',event=>{if(publishing)event.preventDefault();});
 $('#editor').addEventListener('close',()=>{
   uploader?.dispose();uploader=null;

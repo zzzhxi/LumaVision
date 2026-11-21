@@ -83,7 +83,6 @@ body:not(.view-secondary) .intro{display:none}
 .search-row{display:none;order:-1}.search-visible .search-row{display:flex}
 .filter-row .media-tabs{flex-shrink:0}.filter-row .media-tabs button{font-size:10px;padding:7px 8px}.filter-row .media-tabs svg{display:none}.sort-tabs{display:flex;gap:3px;flex-shrink:0}.sort-tabs button{font-size:12px;padding:9px 10px;border-radius:8px;color:#515b6d}.sort-tabs button.active{background:#e9eaf0;color:#26314b;font-weight:600}
 .gallery-search-toggle{width:32px;height:32px;flex-shrink:0;background:#f0f1f7}.gallery-search-toggle svg{width:15px;height:15px}
-.cards{columns:3;column-gap:12px}
 .card{position:relative;border:0;background:transparent;margin-bottom:12px;border-radius:13px}
 .card-visual{border-radius:13px}.card-meta{display:none}
 .card-quick-actions{position:absolute;bottom:11px;left:11px;right:11px;z-index:4;border:0;padding:0;display:grid;grid-template-columns:1fr auto;gap:7px;opacity:0;transition:opacity .18s}
@@ -652,6 +651,9 @@ dialog.closing::backdrop{animation:backdrop-exit .28s cubic-bezier(.645,.045,.35
 @keyframes save-particles{from{transform:scale(.65);opacity:1}to{transform:scale(1.45);opacity:0}}
 @keyframes save-count-in{from{transform:translateY(100%);opacity:0}to{transform:translateY(0);opacity:1}}
 @keyframes save-count-out{from{transform:translateY(0);opacity:1}to{transform:translateY(-100%);opacity:0}}
+
+/* 状态播报保留在无障碍树中，只对视觉隐藏。 */
+.visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
 
 @media(prefers-reduced-motion:reduce){
   .reveal{opacity:1;transform:none}

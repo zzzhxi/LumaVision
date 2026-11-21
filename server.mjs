@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
+import { createBrotliCompress, createGzip, constants as zlibConstants } from 'node:zlib';
 import { resolve, extname, isAbsolute, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createStore, HttpError, limits } from './storage.mjs';
@@ -16,7 +17,50 @@ import { createAuthStore, socialLinks, SESSION_COOKIE, SESSION_TTL } from './aut
 const root=resolve(import.meta.dirname);
 const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.jpg':'image/jpeg','.webp':'image/webp','.png':'image/png','.gif':'image/gif','.mp4':'video/mp4','.webm':'video/webm'};
 const publicFiles=new Set(['/index.html','/styles.css','/uploads.css','/auth.css','/auth-ui.js','/app.js','/studio.js','/generation-ui.js','/drafts.js','/media.js','/data.js','/email-domains.js','/favicon.svg']);
-const json=(res,status,body)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(body));};
+const compressibleType=/^(?:text\/|application\/(?:javascript|json)|image\/svg\+xml)/;
+// 只按客户端明确声明的编码压缩，q=0 视为不支持。
+function acceptedEncoding(req){
+  const header=String(req?.headers?.['accept-encoding']||'');
+  if(!header)return null;
+  const weights=new Map();
+  for(const part of header.split(',')){
+    const [name,...params]=part.trim().split(';');
+    const key=name.trim().toLowerCase();
+    if(!key)continue;
+    let quality=1;
+    for(const param of params){
+      const [k,v]=param.split('=').map(part=>part.trim().toLowerCase());
+      if(k==='q')quality=Number(v)||0;
+    }
+    weights.set(key,quality);
+  }
+  const br=weights.get('br')??0,gzip=weights.get('gzip')??0;
+  if(br>0&&br>=gzip)return 'br';
+  if(gzip>0)return 'gzip';
+  return null;
+}
+function compressorFor(encoding){
+  return encoding==='br'
+    ? createBrotliCompress({params:{[zlibConstants.BROTLI_PARAM_QUALITY]:5}})
+    : createGzip({level:6});
+}
+const json=(res,status,body)=>{
+  const payload=JSON.stringify(body);
+  const headers={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Vary':'Accept-Encoding'};
+  const encoding=payload.length>=512?acceptedEncoding(res.req):null;
+  if(encoding){
+    headers['Content-Encoding']=encoding;
+    res.writeHead(status,headers);
+    const compressor=compressorFor(encoding);
+    compressor.on('error',()=>res.destroy());
+    res.on('close',()=>compressor.destroy());
+    compressor.end(payload);
+    compressor.pipe(res);
+    return;
+  }
+  res.writeHead(status,{...headers,'Content-Length':Buffer.byteLength(payload)});
+  res.end(payload);
+};
 async function body(req,max){
   if(Number(req.headers['content-length'])>max)throw new HttpError(413,'上传内容过大。');
   const chunks=[];let size=0;
@@ -42,6 +86,8 @@ function cookieValue(req,name){
 function serveFile(req,res,file,size,mtimeMs){
   const mime=types[extname(file)]||'application/octet-stream';
   const headers={'Content-Type':mime,'Accept-Ranges':'bytes','Cache-Control':res.getHeader('Cache-Control')||'no-cache','X-Content-Type-Options':'nosniff'};
+  const compressible=compressibleType.test(mime);
+  if(compressible)headers['Vary']='Accept-Encoding';
   if(mtimeMs!==undefined&&!String(headers['Cache-Control']).includes('no-store')){
     headers.ETag=`"${size.toString(16)}-${mtimeMs.toString(16)}"`;
     headers['Last-Modified']=new Date(mtimeMs).toUTCString();
@@ -58,6 +104,18 @@ function serveFile(req,res,file,size,mtimeMs){
     else{start=Number(match[1]);if(match[2])end=Math.min(end,Number(match[2]));}
     if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||start>=size||end<start){res.writeHead(416,{'Content-Range':`bytes */${size}`});res.end();return;}
     status=206;headers['Content-Range']=`bytes ${start}-${end}/${size}`;
+  }
+  const encoding=status===200&&compressible&&size>=1024?acceptedEncoding(req):null;
+  if(encoding){
+    headers['Content-Encoding']=encoding;
+    res.writeHead(status,headers);
+    if(req.method==='HEAD'){res.end();return;}
+    const stream=createReadStream(file),compressor=compressorFor(encoding);
+    stream.on('error',()=>res.destroy());
+    compressor.on('error',()=>res.destroy());
+    res.on('close',()=>{stream.destroy();compressor.destroy();});
+    stream.pipe(compressor).pipe(res);
+    return;
   }
   headers['Content-Length']=Math.max(0,end-start+1);res.writeHead(status,headers);
   if(req.method==='HEAD'||!size){res.end();return;}
@@ -408,6 +466,8 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
       if(path==='/')path='/index.html';
       const file=resolve(root,'.'+path);
       if(!file.startsWith(root+sep)||(!publicFiles.has(path)&&!/^\/assets\/[\w-]+\.(jpg|png|webp|svg)$/.test(path)))throw new HttpError(404,'Not found');
+      // 示例素材内容固定，可以短期缓存；前端脚本与样式保持 no-cache，避免部署后前后端不一致。
+      if(path.startsWith('/assets/'))res.setHeader('Cache-Control','public, max-age=604800');
       const info=await stat(file);if(!info.isFile())throw new HttpError(404,'Not found');serveFile(req,res,file,info.size);
     }catch(error){
       if(res.headersSent||res.destroyed){res.destroy();return;}
