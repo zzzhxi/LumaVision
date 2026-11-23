@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { HttpError, identify, limits } from './storage.mjs';
 
 const defaultBaseUrl = 'http://127.0.0.1:38650/v1';
+const defaultModelCategory = 'GPT Image';
 const assert = (ok, message, status = 400) => { if (!ok) throw new HttpError(status, message); };
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 function requiredText(value, max, name) {
@@ -27,7 +28,9 @@ function normalizeConfig(input, previous) {
   assert(Array.isArray(models) && models.length <= 50, '最多启用 50 个模型。');
   const normalized = models.map(model => {
     const id = requiredText(model?.id, 200, '模型 ID');
-    return { id, name: requiredText(model.name || id.slice(0, 40), 40, '模型名称') };
+    const name = requiredText(model.name || id.slice(0, 40), 40, '模型名称');
+    const category = requiredText(model.category || defaultModelCategory, 30, '模型分类');
+    return { id, name, category };
   });
   assert(new Set(normalized.map(model => model.id)).size === normalized.length, '模型 ID 不能重复。');
   const defaultModel = input.defaultModel ?? previous.defaultModel;
@@ -115,7 +118,7 @@ export function createGenerationService(storageRoot, generations, { fetchImpl = 
       const { bytes } = await upstream(candidate.baseUrl + '/models', { headers: { Authorization: 'Bearer ' + candidate.apiKey } }, candidate.apiKey, 2 * 1024 ** 2, AbortSignal.timeout(Math.min(timeoutMs, 15000)));
       const data = parseJson(bytes);
       assert(Array.isArray(data?.data), '模型列表格式不正确。', 502);
-      return { models: data.data.filter(model => typeof model?.id === 'string' && model.id.trim() && model.id.length <= 200).map(model => ({ id: model.id, name: model.id.slice(0, 40) })) };
+      return { models: data.data.filter(model => typeof model?.id === 'string' && model.id.trim() && model.id.length <= 200).map(model => ({ id: model.id, name: model.id.slice(0, 40), category: defaultModelCategory })) };
     },
     async generate(input, uploads, author) {
       await ready;
@@ -123,6 +126,9 @@ export function createGenerationService(storageRoot, generations, { fetchImpl = 
       const requestId = requiredText(input.requestId, 36, '请求编号');
       assert(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(requestId), '请求编号不正确。');
       const modelId = requiredText(input.modelId, 200, '模型 ID');
+      assert(input.modelCategory === undefined || typeof input.modelCategory === 'string', '模型分类不正确。');
+      const requestedCategory = (input.modelCategory || '').trim();
+      assert(requestedCategory.length <= 30, '模型分类不正确。');
       const title = input.title ? requiredText(input.title, 70, '创作名称') : '未命名创作';
       const prompt = requiredText(input.prompt, 8000, '提示词');
       assert(input.negative === undefined || typeof input.negative === 'string' && input.negative.length <= 2000, '负面提示词不正确。');
@@ -139,7 +145,7 @@ export function createGenerationService(storageRoot, generations, { fetchImpl = 
         assert(format?.type === 'image' && (!file.type || file.type === format.mime || file.type === 'application/octet-stream'), '参考图必须是有效的 JPEG、PNG、WebP 或 GIF。', 415);
         references.push({ bytes, format, hash: hash(bytes) });
       }
-      const params = { title, prompt, negative, category, modelId, width: input.width, height: input.height, count: input.count };
+      const params = { title, prompt, negative, category, modelId, modelCategory: requestedCategory, width: input.width, height: input.height, count: input.count };
       const requestHash = hash(JSON.stringify({ ...params, references: references.map(file => file.hash) }));
       const key = hash(author.id + ':' + requestId), hex = key.slice(0, 32);
       const id = 'generation-' + [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join('-');
@@ -147,6 +153,9 @@ export function createGenerationService(storageRoot, generations, { fetchImpl = 
       if (previous) { assert(previous.hash === requestHash, '相同请求编号的参数不一致。', 409); return previous.promise; }
       const generateImages = async (snapshot, model) => {
         const signal = AbortSignal.timeout(timeoutMs);
+        // 生成记录归入模型分类，未指定时使用管理员为该模型配置的分类。
+        const allowed = new Set([defaultModelCategory, ...snapshot.models.map(item => item.category)]);
+        const group = allowed.has(requestedCategory) ? requestedCategory : model.category;
         const text = prompt + (negative ? '\n\n不希望出现：\n' + negative : '');
         const args = { model: modelId, prompt: text, n: input.count, size: `${input.width}x${input.height}` };
         const headers = { Authorization: 'Bearer ' + snapshot.apiKey };
@@ -177,7 +186,7 @@ export function createGenerationService(storageRoot, generations, { fetchImpl = 
         }
         const upstreamId = data.id || response.headers.get('x-request-id');
         const providerResultId = typeof upstreamId === 'string' && upstreamId.length <= 180 && !upstreamId.includes(snapshot.apiKey) ? upstreamId : null;
-        return generations.record({ id, ...params, model: model.name, ratio: ratioFor(input.width, input.height), provider: 'OpenAI-compatible', providerResultId, requestId, requestHash }, files, author);
+        return generations.record({ id, ...params, model: group, modelName: model.name, ratio: ratioFor(input.width, input.height), provider: 'OpenAI-compatible', providerResultId, requestId, requestHash }, files, author);
       };
       let started = false;
       const run = async () => {

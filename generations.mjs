@@ -32,6 +32,7 @@ export function createGenerationStore(root){
       const id=input.id||'generation-'+randomUUID();assert(idRule.test(id),'生成记录编号不正确。');
       const metadata={id,title:text(input.title,70),prompt:text(input.prompt,8000),model:text(input.model,40),category:text(input.category,30),ratio:text(input.ratio,10),provider:text(input.provider,80),providerResultId:input.providerResultId?text(input.providerResultId,180):null};
       assert(/^[1-9]\d{0,3}:[1-9]\d{0,3}$/.test(metadata.ratio),'画面比例不支持。');
+      if(input.modelName)metadata.modelName=text(input.modelName,40);
       if(input.modelId)metadata.modelId=text(input.modelId,200);
       if(input.requestId){
         metadata.requestId=text(input.requestId,36);metadata.requestHash=text(input.requestHash,64);

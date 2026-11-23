@@ -10,31 +10,50 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     try { settings = await request('/api/admin/generation-config'); }
     catch (error) { toast(error.message); return; }
     if (session().epoch !== epoch) return;
-    dialog.innerHTML = `<form class="mini-form generation-form"><button type="button" class="icon-button close" data-close="generation-settings" aria-label="关闭生图服务设置">×</button><p class="eyebrow">IMAGE SERVICE</p><h2 id="generation-settings-title">生图服务</h2><p class="generation-help">由管理员统一配置，登录用户共用。模型列表可能包含不能生图的模型，请只启用已确认的图片模型。</p><label class="field">API Base URL<input name="baseUrl" type="url" required value="${escape(settings.baseUrl)}" placeholder="http://127.0.0.1:38650/v1"></label><label class="field">API Key<input name="apiKey" type="password" autocomplete="new-password" placeholder="${settings.hasApiKey ? '已配置；留空保留原密钥' : '输入 Key 或 Bearer Key'}"></label><label class="generation-check"><input name="clearKey" type="checkbox">清除已保存的密钥</label><button type="button" class="button soft" id="generation-test">测试连接并读取模型</button><div class="field"><span>已启用的模型</span><div id="generation-models" class="generation-models"></div></div><div class="generation-manual"><label class="field">手动添加模型 ID<input id="generation-model-id" maxlength="200" placeholder="精确的接口模型 ID"></label><button type="button" class="button soft" id="generation-add-model">添加</button></div><label class="field">默认模型<select name="defaultModel"></select></label><p id="generation-settings-status" role="status" aria-live="polite"></p><div class="mini-form-actions"><button type="button" class="button soft" data-close="generation-settings">取消</button><button type="submit" class="button dark">保存配置</button></div></form>`;
+    dialog.innerHTML = `<form class="mini-form generation-form"><button type="button" class="icon-button close" data-close="generation-settings" aria-label="关闭生图服务设置">×</button><p class="eyebrow">IMAGE SERVICE</p><h2 id="generation-settings-title">生图服务</h2><p class="generation-help">由管理员统一配置，登录用户共用。模型列表可能包含不能生图的模型，请只启用已确认的图片模型。别称显示在创作台的模型选择里，模型分类决定生成结果归入灵感库的哪个模型分组。</p><label class="field">API Base URL<input name="baseUrl" type="url" required value="${escape(settings.baseUrl)}" placeholder="http://127.0.0.1:38650/v1"></label><label class="field">API Key<input name="apiKey" type="password" autocomplete="new-password" placeholder="${settings.hasApiKey ? '已配置；留空保留原密钥' : '输入 Key 或 Bearer Key'}"></label><label class="generation-check"><input name="clearKey" type="checkbox">清除已保存的密钥</label><button type="button" class="button soft" id="generation-test">测试连接并读取模型</button><div class="field"><span>已启用的模型</span><div id="generation-models" class="generation-models"></div></div><div class="generation-manual"><label class="field">手动添加模型 ID<input id="generation-model-id" maxlength="200" placeholder="精确的接口模型 ID"></label><button type="button" class="button soft" id="generation-add-model">添加</button></div><label class="field">默认模型<select name="defaultModel"></select></label><p id="generation-settings-status" role="status" aria-live="polite"></p><div class="mini-form-actions"><button type="button" class="button soft" data-close="generation-settings">取消</button><button type="submit" class="button dark">保存配置</button></div></form>`;
     const form = dialog.querySelector('form'), status = form.querySelector('[role="status"]');
     const models = new Map(settings.models.map(model => [model.id, model]));
     const enabled = new Set(settings.models.map(model => model.id));
     let preferred = settings.defaultModel;
     const isCurrent = () => form.isConnected && session().epoch === epoch;
+    // 模型分类必须与灵感库的模型筛选一致，生成结果才能落到对应分组。
+    const categoryOptions = () => {
+      const list = (document.querySelector('.model-group[data-categories]')?.dataset.categories || '').split(',').map(item => item.trim()).filter(Boolean);
+      return list.length ? list : ['GPT Image'];
+    };
     function renderModels() {
-      form.querySelector('#generation-models').innerHTML = [...models.values()].map(model => `<label class="generation-check"><input type="checkbox" value="${escape(model.id)}" ${enabled.has(model.id) ? 'checked' : ''}><span>${escape(model.id)}</span></label>`).join('') || '<span class="generation-help">读取列表或手动添加一个模型。</span>';
+      const options = categoryOptions();
+      form.querySelector('#generation-models').innerHTML = [...models.values()].map(model => {
+        const categories = options.includes(model.category) ? options : [model.category, ...options];
+        return `<div class="generation-model"><label class="generation-check"><input type="checkbox" value="${escape(model.id)}" ${enabled.has(model.id) ? 'checked' : ''}><span title="${escape(model.id)}">${escape(model.id)}</span></label><label class="generation-model-field">别称<input data-model-alias="${escape(model.id)}" maxlength="40" value="${escape(model.name)}"></label><label class="generation-model-field">模型分类<select data-model-category="${escape(model.id)}">${categories.map(category => `<option value="${escape(category)}" ${category === model.category ? 'selected' : ''}>${escape(category)}</option>`).join('')}</select></label></div>`;
+      }).join('') || '<span class="generation-help">读取列表或手动添加一个模型。</span>';
       const select = form.elements.defaultModel;
       const selected = [...models.values()].filter(model => enabled.has(model.id));
       if (!enabled.has(preferred)) preferred = selected[0]?.id || '';
-      select.innerHTML = selected.map(model => `<option value="${escape(model.id)}">${escape(model.id)}</option>`).join('') || '<option value="">暂无启用模型</option>';
+      select.innerHTML = selected.map(model => `<option value="${escape(model.id)}" title="${escape(model.id)}">${escape(model.name)}</option>`).join('') || '<option value="">暂无启用模型</option>';
       select.value = preferred;
     }
     function candidate() { return { baseUrl: form.elements.baseUrl.value.trim(), apiKey: form.elements.apiKey.value, clearKey: form.elements.clearKey.checked }; }
     renderModels();
-    form.querySelector('#generation-models').addEventListener('change', event => {
-      if (event.target.checked) enabled.add(event.target.value); else enabled.delete(event.target.value);
-      preferred = form.elements.defaultModel.value; renderModels();
+    const modelList = form.querySelector('#generation-models');
+    modelList.addEventListener('change', event => {
+      const target = event.target;
+      if (target.matches('input[type="checkbox"]')) {
+        if (target.checked) enabled.add(target.value); else enabled.delete(target.value);
+        preferred = form.elements.defaultModel.value; renderModels(); return;
+      }
+      const model = models.get(target.dataset.modelCategory);
+      if (model) model.category = target.value;
+    });
+    modelList.addEventListener('input', event => {
+      const model = models.get(event.target.dataset.modelAlias);
+      if (model) model.name = event.target.value;
     });
     form.elements.defaultModel.addEventListener('change', () => { preferred = form.elements.defaultModel.value; });
     form.querySelector('#generation-add-model').addEventListener('click', () => {
       const input = form.querySelector('#generation-model-id'), id = input.value.trim();
       if (!id) { input.focus(); return; }
-      models.set(id, { id, name: id.slice(0, 40) }); enabled.add(id); input.value = ''; renderModels();
+      models.set(id, { id, name: id.slice(0, 40), category: 'GPT Image' }); enabled.add(id); input.value = ''; renderModels();
     });
     async function busy(action) {
       form.querySelectorAll('button,input,select').forEach(control => { control.disabled = true; });
@@ -66,6 +85,8 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     const modelSelect = form.querySelector('#creative-model'), ratio = form.querySelector('#creative-ratio');
     const button = form.querySelector('#generate-button'), status = form.querySelector('.generation-status');
     status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+    modelSelect.closest('.field').insertAdjacentHTML('afterend', '<label class="field">模型分类<select id="creative-model-category"></select></label>');
+    const categorySelect = form.querySelector('#creative-model-category');
     const legacySizes = { '3:4': [768, 1024], '4:3': [1024, 768], '16:9': [1536, 864], '9:16': [864, 1536] };
     const savedSize = [draft.width, draft.height];
     const [width, height] = savedSize.every(value => Number.isInteger(value) && value >= 1 && value <= 9999) ? savedSize : Object.hasOwn(legacySizes, draft.ratio) ? legacySizes[draft.ratio] : [1024, 1024];
@@ -76,6 +97,7 @@ export function createGenerationUI({ request, session, escape, toast, completed,
       const custom = size.value === 'custom';
       const image = form.querySelector('#creative-type').value === 'image';
       form.querySelector('.generation-custom-size').hidden = !custom;
+      categorySelect.closest('.field').hidden = !image;
       for (const input of dimensions.querySelectorAll('input')) { input.required = custom && image; input.disabled = !custom || !image; }
       if (size.value !== 'custom') {
         const [w, h] = size.value.split('x'); form.querySelector('#creative-width').value = w; form.querySelector('#creative-height').value = h;
@@ -94,6 +116,23 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     const epoch = session().epoch, userId = session().user?.id;
     let config = null, error = '', loading = !!userId;
     const current = () => form.isConnected && session().epoch === epoch;
+    let categoryInitialized = false;
+    const categoryOptions = () => {
+      const options = new Set(['GPT Image']);
+      for (const model of config?.models || []) if (model.category) options.add(model.category);
+      return [...options];
+    };
+    function fillCategories(selected) {
+      const options = categoryOptions();
+      categorySelect.innerHTML = options.map(option => `<option value="${escape(option)}">${escape(option)}</option>`).join('');
+      categorySelect.value = options.includes(selected) ? selected : 'GPT Image';
+    }
+    // 生成结果归入所选模型分类，默认跟随管理员为该模型配置的分类。
+    function syncCategory() {
+      const model = config?.models?.find(item => item.id === modelSelect.value);
+      fillCategories(categoryInitialized ? model?.category : draft.modelCategory || model?.category);
+      categoryInitialized = true;
+    }
     function render() {
       if (!current()) return;
       const image = form.querySelector('#creative-type').value === 'image';
@@ -117,8 +156,10 @@ export function createGenerationUI({ request, session, escape, toast, completed,
       if (!config.models.length) return;
       modelSelect.innerHTML = config.models.map(model => `<option value="${escape(model.id)}" data-model-id="${escape(model.id)}">${escape(model.name)}</option>`).join('') || '<option value="">暂无可用模型</option>';
       modelSelect.value = config.models.some(model => model.id === draft.modelId) ? draft.modelId : config.defaultModel;
+      syncCategory();
     }
     form.querySelector('#creative-type').addEventListener('change', () => { fillModels(); syncSize(); render(); });
+    modelSelect.addEventListener('change', () => { syncCategory(); });
     refreshCreator = render;
     render();
     button.addEventListener('click', async () => {

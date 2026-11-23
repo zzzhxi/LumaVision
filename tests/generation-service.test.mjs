@@ -63,7 +63,7 @@ async function setup(t, { timeoutMs = 1000 } = {}) {
     const response = await fetch(url() + '/api/generations', { method: 'POST', headers: actor ? { cookie: cookies[actor] } : {}, body: form });
     return { status: response.status, body: await response.json() };
   }
-  const configure = () => api('/api/admin/generation-config', { method: 'PUT', body: { baseUrl: 'http://image-service.test/v1/', apiKey: 'Bearer ' + key, models: [{ id: modelId, name: '测试图片模型' }], defaultModel: modelId } });
+  const configure = (overrides = {}) => api('/api/admin/generation-config', { method: 'PUT', body: { baseUrl: 'http://image-service.test/v1/', apiKey: 'Bearer ' + key, models: [{ id: modelId, name: '测试图片模型' }], defaultModel: modelId, ...overrides } });
   return { dir, calls, users, cookies, api, generate, configure, url, get app() { return app; }, mode(value) { mode = value; }, delay(value) { delay = value; }, async restart() { await new Promise(done => app.server.close(done)); app = await createApp(options); await listen(); } };
 }
 
@@ -98,7 +98,7 @@ test('普通账号可文生图，长模型ID和自定义比例完整保存，图
   const input = payload({ width: 1232, height: 1600 });
   const result = await env.generate(input); assert.equal(result.status, 200);
   const record = result.body.generation;
-  assert.equal(record.modelId, modelId); assert.equal(record.model, '测试图片模型'); assert.equal(record.ratio, '77:100');
+  assert.equal(record.modelId, modelId); assert.equal(record.model, 'GPT Image'); assert.equal(record.modelName, '测试图片模型'); assert.equal(record.ratio, '77:100');
   assert.equal(record.authorId, env.users.member.id); assert.equal(record.providerResultId, 'provider-fixture-id');
   assert.equal(record.negative, '文字');
   const args = JSON.parse(env.calls[0].options.body);
@@ -126,7 +126,7 @@ test('参考图使用edits multipart，生成图片可按原有审核流程投�
   const form = new FormData(); form.set('metadata', JSON.stringify(metadata));
   const response = await fetch(env.url() + '/api/works', { method: 'POST', headers: { cookie: env.cookies.member }, body: form });
   assert.equal(response.status, 200); const work = (await response.json()).work;
-  assert.equal(work.status, 'pending'); assert.equal(work.modelId, modelId); assert.equal(work.ratio, '2:3');
+  assert.equal(work.status, 'pending'); assert.equal(work.modelId, modelId); assert.equal(work.model, 'GPT Image'); assert.equal(work.ratio, '2:3');
   assert.notEqual(work.media[0].id, record.media[0].id);
   const published = await env.app.store.review(work.id, { decision: 'approve', expectedRevision: work.revision });
   const edited = await env.app.store.save({ ...metadata, requestId: randomUUID(), revision: published.revision, media: work.media.map(media => ({ existing: media.id })) }, [], env.users.member);
@@ -155,6 +155,23 @@ test('鉴权、模型、尺寸和参考图边界在调用上游前拒绝', async
   assert.equal(env.calls.length, 0);
   const response = await fetch(env.url() + '/api/generations', { method: 'POST', headers: { cookie: env.cookies.member, origin: 'http://foreign.test' } });
   assert.equal(response.status, 403);
+});
+
+test('模型别称与模型分类可配置，生成记录按分类归档，未开放的分类不生效', async t => {
+  const env = await setup(t);
+  assert.equal((await env.configure({ models: [{ id: modelId, name: 'GPT Image 2.6', category: 'FLUX' }] })).status, 200);
+  const saved = await env.api('/api/admin/generation-config');
+  assert.equal(saved.body.models[0].name, 'GPT Image 2.6'); assert.equal(saved.body.models[0].category, 'FLUX');
+  const published = await env.api('/api/generation/config', { actor: 'member' });
+  assert.equal(published.body.models[0].name, 'GPT Image 2.6'); assert.equal(published.body.models[0].category, 'FLUX');
+  assert.equal((await env.api('/api/admin/generation-config', { method: 'PUT', body: { models: [{ id: modelId, category: 7 }] } })).status, 400);
+  const grouped = await env.generate(payload());
+  assert.equal(grouped.status, 200); assert.equal(grouped.body.generation.model, 'FLUX'); assert.equal(grouped.body.generation.modelName, 'GPT Image 2.6');
+  const unknown = await env.generate(payload({ modelCategory: 'Nano Banana' }));
+  assert.equal(unknown.body.generation.model, 'FLUX');
+  const defaultGroup = await env.generate(payload({ modelCategory: 'GPT Image' }));
+  assert.equal(defaultGroup.body.generation.model, 'GPT Image');
+  assert.equal((await env.generate(payload({ modelCategory: 7 }))).status, 400);
 });
 
 test('上游错误、限流、超时和无效结果均无成功记录且不自动重试，错误不泄露Key', async t => {
