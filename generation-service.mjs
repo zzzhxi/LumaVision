@@ -62,6 +62,27 @@ function ratioFor(width, height) {
   while (b) [a, b] = [b, a % b];
   return `${width / a}:${height / a}`;
 }
+// 生图服务可能用多种形状回报失败原因，这里尽量取出人可读的原文。
+function messageFrom(value) {
+  if (typeof value === 'string') return value.trim();
+  if (Array.isArray(value)) { for (const item of value) { const text = messageFrom(item); if (text) return text; } return ''; }
+  if (!value || typeof value !== 'object') return '';
+  for (const key of ['message', 'msg', 'text', 'content', 'detail', 'description', 'reason', 'error']) {
+    const text = messageFrom(value[key]);
+    if (text) return text;
+  }
+  return '';
+}
+function upstreamDetail(bytes) {
+  const raw = bytes.toString('utf8').trim();
+  if (!raw) return '';
+  try { return messageFrom(JSON.parse(raw)); }
+  catch {
+    // 非 JSON 的错误正文（纯文本）直接展示；HTML 错误页没有可读信息。
+    if (raw.startsWith('<')) return '';
+    return raw.split('\n').map(line => line.trim()).find(Boolean) || '';
+  }
+}
 
 export function createGenerationService(storageRoot, generations, { fetchImpl = fetch, timeoutMs = 240000 } = {}) {
   const path = join(storageRoot, 'generation-config.json');
@@ -87,10 +108,10 @@ export function createGenerationService(storageRoot, generations, { fetchImpl = 
       throw new HttpError(signal.aborted ? 504 : 502, signal.aborted ? '生图服务请求超时，请先检查生成记录，避免重复生成。' : '无法连接生图服务，请检查服务地址和运行状态。');
     }
     if (!response.ok) {
-      let data;
-      try { data = JSON.parse(bytes.toString()); } catch { /* Non-JSON errors use a safe status message. */ }
-      const detail = redact(data?.error?.message || (typeof data?.error === 'string' ? data.error : ''), key);
-      const message = response.status === 401 || response.status === 403 ? '生图服务密钥无效或无权限，请联系管理员。' : response.status === 429 ? '生图服务请求受限，请稍后再试。' : '生图服务拒绝请求' + (detail ? '：' + detail : `（HTTP ${response.status}）。`);
+      const detail = redact(upstreamDetail(bytes), key);
+      const message = response.status === 401 || response.status === 403 ? '生图服务密钥无效或无权限，请联系管理员。'
+        : response.status === 429 ? '生图服务请求受限，请稍后再试。' + (detail ? detail : '')
+        : '生图服务拒绝请求（HTTP ' + response.status + '）' + (detail ? '：' + detail : '。');
       throw new HttpError(response.status === 429 ? 429 : 502, message);
     }
     return { response, bytes };

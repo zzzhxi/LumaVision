@@ -138,6 +138,7 @@ export function createGenerationUI({ request, session, escape, toast, completed,
       const image = form.querySelector('#creative-type').value === 'image';
       const busy = running.has(userId);
       dimensions.hidden = !image; ratio.closest('.field').hidden = image;
+      status.classList.toggle('has-error', !!error);
       button.disabled = !image || loading || busy || !!userId && (!config?.available || !modelSelect.value);
       button.title = '';
       button.textContent = !image ? '生成视频（暂未接入）' : busy ? '正在生成图片…' : userId ? '生成图片' : '登录后生成图片';

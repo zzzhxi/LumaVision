@@ -16,7 +16,7 @@ const payload = overrides => ({ requestId: randomUUID(), title: '测试生成', 
 async function setup(t, { timeoutMs = 1000 } = {}) {
   const dir = await mkdtemp(join(parent, 'generation-test-'));
   const calls = [];
-  let mode = 'base64', delay = null;
+  let mode = 'base64', delay = null, policyBody = '', policyType = 'application/json';
   const fetchImpl = async (url, options) => {
     calls.push({ url: String(url), options });
     if (String(url).endsWith('/models')) {
@@ -36,6 +36,7 @@ async function setup(t, { timeoutMs = 1000 } = {}) {
     if (mode === 'auth') return Response.json({ error: { message: key } }, { status: 401 });
     if (mode === 'rate') return Response.json({ error: { message: 'rate limit' } }, { status: 429 });
     if (mode === 'size') return Response.json({ error: { message: 'unsupported size ' + key } }, { status: 400 });
+    if (mode === 'policy') return new Response(policyBody, { status: 400, headers: { 'Content-Type': policyType } });
     if (mode === 'json') return new Response('not-json');
     if (mode === 'empty') return Response.json({ data: [] });
     if (mode === 'invalid') return Response.json({ data: [{ b64_json: Buffer.from('not an image').toString('base64') }] });
@@ -64,7 +65,7 @@ async function setup(t, { timeoutMs = 1000 } = {}) {
     return { status: response.status, body: await response.json() };
   }
   const configure = (overrides = {}) => api('/api/admin/generation-config', { method: 'PUT', body: { baseUrl: 'http://image-service.test/v1/', apiKey: 'Bearer ' + key, models: [{ id: modelId, name: '测试图片模型' }], defaultModel: modelId, ...overrides } });
-  return { dir, calls, users, cookies, api, generate, configure, url, get app() { return app; }, mode(value) { mode = value; }, delay(value) { delay = value; }, async restart() { await new Promise(done => app.server.close(done)); app = await createApp(options); await listen(); } };
+  return { dir, calls, users, cookies, api, generate, configure, url, get app() { return app; }, mode(value) { mode = value; }, policy(body, type) { policyBody = body; policyType = type; }, delay(value) { delay = value; }, async restart() { await new Promise(done => app.server.close(done)); app = await createApp(options); await listen(); } };
 }
 
 test('配置只允许管理员维护，连接测试不保存密钥，公开配置不暴露服务地址和密钥，重启与清除有效', async t => {
@@ -172,6 +173,28 @@ test('模型别称与模型分类可配置，生成记录按分类归档，未�
   const defaultGroup = await env.generate(payload({ modelCategory: 'GPT Image' }));
   assert.equal(defaultGroup.body.generation.model, 'GPT Image');
   assert.equal((await env.generate(payload({ modelCategory: 7 }))).status, 400);
+});
+
+test('上游400的失败原因原样回传，正文形状不影响提示，错误里不含密钥', async t => {
+  const env = await setup(t); await env.configure();
+  const policy = '非常抱歉，生成的图片可能违反了我们的内容政策。如果你认为此判断有误，请重试或修改提示语。';
+  const bodies = [
+    [JSON.stringify({ error: { message: policy, type: 'new_api_error' } }), 'application/json'],
+    [JSON.stringify({ message: policy }), 'application/json'],
+    [JSON.stringify({ detail: policy }), 'application/json'],
+    [JSON.stringify({ error: { content: [{ type: 'text', text: policy }] } }), 'application/json'],
+    [policy, 'text/plain']
+  ];
+  for (const [body, type] of bodies) {
+    env.mode('policy'); env.policy(body, type);
+    const result = await env.generate(payload());
+    assert.equal(result.status, 502);
+    assert.ok(result.body.error.includes(policy), '应回传上游原因，实际：' + result.body.error);
+    assert.equal(JSON.stringify(result.body).includes(key), false);
+  }
+  env.mode('policy'); env.policy('Bearer ' + key + ' 不可用', 'text/plain');
+  const leaked = await env.generate(payload());
+  assert.equal(leaked.status, 502); assert.equal(JSON.stringify(leaked.body).includes(key), false);
 });
 
 test('上游错误、限流、超时和无效结果均无成功记录且不自动重试，错误不泄露Key', async t => {
