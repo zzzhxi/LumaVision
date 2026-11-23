@@ -2,6 +2,8 @@
 
 适用于 Debian、Node.js 24 LTS、systemd，以及 443 由 Nginx stream 按 SNI 分流到 8443 的服务器；部署目标为域名根路径的独立 HTTPS 站点。部署流程从空数据目录开始，画廊在有作品发布后才会出现内容。共享域名的子路径部署需要另行处理静态资源、API 与 JSON 媒体地址，不能直接使用本模板的独立站点配置。
 
+共享域名子路径部署的额外约束：发布副本要把四个前端模块（`app.js`、`auth-ui.js`、`generation-ui.js`、`media.js`）里的 `/api/` 换成 `/lumavision-api/` 标记，交由 Nginx `sub_filter` 改写成 `/LumaVision/api/`；同时所有依赖 `sub_filter` 的 location 都要写 `proxy_set_header Accept-Encoding "";`，因为应用会对文本响应做 Brotli/Gzip，压缩过的响应体无法被 `sub_filter` 改写。
+
 ```text
 浏览器 → Nginx :443 SNI → :8443 HTTPS → Node 127.0.0.1:5173
                                            └─ /var/lib/lumavision
