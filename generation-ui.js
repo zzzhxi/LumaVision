@@ -1,4 +1,9 @@
-export function createGenerationUI({ request, session, escape, toast, completed, login }) {
+const videoConfigPath = '/api/admin/video-generation-config';
+const videoRatios = ['16:9', '9:16', '1:1', '4:3', '3:4'];
+const videoDurations = [5, 6, 8, 10];
+const appPath = new URL('./', import.meta.url).pathname;
+
+export function createGenerationUI({ request, session, escape, toast, completed, videoAccepted, login }) {
   const dialog = document.querySelector('#generation-settings');
   const running = new Set();
   let refreshCreator;
@@ -80,10 +85,61 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     });
     dialog.showModal();
   }
+  async function openVideoSettings() {
+    if (session().user?.role !== 'admin') return;
+    const epoch = session().epoch;
+    let settings;
+    try { settings = await request(videoConfigPath); }
+    catch (error) { toast(error.message); return; }
+    if (session().epoch !== epoch || dialog.open) return;
+    dialog.innerHTML = `<form class="mini-form generation-form">
+      <button type="button" class="icon-button close" data-close="generation-settings" aria-label="关闭视频服务设置">×</button>
+      <h2 id="generation-settings-title">视频服务</h2>
+      <label class="field">API Base URL<input name="baseUrl" type="url" required value="${escape(settings.baseUrl)}"></label>
+      <label class="field">API Key<input name="apiKey" type="password" autocomplete="new-password" placeholder="${settings.hasApiKey ? '已配置 · 留空保留原密钥' : 'Muse 管理员签发的平台 Key'}"></label>
+      <label class="generation-check"><input name="clearKey" type="checkbox">清除已保存的密钥</label>
+      <label class="generation-check"><input name="enabled" type="checkbox" ${settings.enabled ? 'checked' : ''}>启用视频生成（仅管理员）</label>
+      <button type="button" class="button soft" data-test-video>测试连接</button>
+      <p role="status"></p>
+      <div class="mini-form-actions"><button type="button" class="button soft" data-close="generation-settings">关闭</button><button type="submit" class="button dark">保存配置</button></div>
+    </form>`;
+    const form = dialog.querySelector('form'), status = form.querySelector('[role="status"]');
+    const fields = form.elements, test = form.querySelector('[data-test-video]'), save = form.querySelector('[type="submit"]');
+    async function submit(verify) {
+      if (!form.reportValidity()) return;
+      const body = { baseUrl: fields.baseUrl.value, apiKey: fields.apiKey.value, clearKey: fields.clearKey.checked, enabled: fields.enabled.checked };
+      test.disabled = save.disabled = true;
+      status.textContent = verify ? '正在测试连接…' : '正在保存配置…';
+      try {
+        const result = await request(verify ? '/api/admin/video-generation-test' : videoConfigPath, { method: verify ? 'POST' : 'PUT', body });
+        if (session().epoch !== epoch || !form.isConnected) return;
+        if (!verify) {
+          fields.apiKey.value = '';
+          fields.clearKey.checked = false;
+          fields.apiKey.placeholder = result.hasApiKey ? '已配置 · 留空保留原密钥' : 'Muse 管理员签发的平台 Key';
+        }
+        status.textContent = verify ? '连接成功，已找到 Muse Video。' : '视频服务配置已保存。';
+      } catch (error) {
+        if (session().epoch === epoch && form.isConnected) status.textContent = error.message;
+      } finally { test.disabled = save.disabled = false; }
+    }
+    test.addEventListener('click', () => submit(true));
+    form.addEventListener('submit', event => { event.preventDefault(); void submit(false); });
+    dialog.showModal();
+  }
   async function attachCreator({ draft, getCreative, references, changed }) {
     const form = document.querySelector('#creative-form');
     const modelSelect = form.querySelector('#creative-model'), ratio = form.querySelector('#creative-ratio');
     const button = form.querySelector('#generate-button'), status = form.querySelector('.generation-status');
+    const type = form.querySelector('#creative-type'), countField = form.querySelector('#creative-count').closest('.field');
+    const prompt = form.querySelector('#creative-prompt'), negative = form.querySelector('.creative-advanced');
+    const description = form.closest('.creator-layout').querySelector('.creator-heading p:last-child');
+    const draftRatios = ratio.innerHTML;
+    let videoRatio = videoRatios.includes(draft.ratio) && draft.type === 'video' ? draft.ratio : '16:9';
+    modelSelect.closest('.field').insertAdjacentHTML('afterend', `<label class="field" hidden>目标时长<select id="creative-duration">${videoDurations.map(seconds => `<option value="${seconds}">${seconds} 秒</option>`).join('')}</select></label>`);
+    const duration = form.querySelector('#creative-duration');
+    duration.value = videoDurations.includes(draft.requestedDuration) ? draft.requestedDuration : 5;
+    ratio.addEventListener('change', () => { if (type.value === 'video' && videoRatios.includes(ratio.value)) videoRatio = ratio.value; });
     status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
     modelSelect.closest('.field').insertAdjacentHTML('afterend', '<label class="field">模型分类<select id="creative-model-category"></select></label>');
     const categorySelect = form.querySelector('#creative-model-category');
@@ -95,10 +151,11 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     size.value = ['1024x1024', '1024x1536', '1536x1024'].includes(`${width}x${height}`) ? `${width}x${height}` : 'custom';
     function syncSize() {
       const custom = size.value === 'custom';
-      const image = form.querySelector('#creative-type').value === 'image';
+      const image = type.value === 'image';
       form.querySelector('.generation-custom-size').hidden = !custom;
       categorySelect.closest('.field').hidden = !image;
       for (const input of dimensions.querySelectorAll('input')) { input.required = custom && image; input.disabled = !custom || !image; }
+      if (!image) return;
       if (size.value !== 'custom') {
         const [w, h] = size.value.split('x'); form.querySelector('#creative-width').value = w; form.querySelector('#creative-height').value = h;
       }
@@ -114,7 +171,9 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     syncSize();
     dimensions.addEventListener('input', () => { syncSize(); changed(); });
     const epoch = session().epoch, userId = session().user?.id;
-    let config = null, error = '', loading = !!userId;
+    const admin = session().user?.role === 'admin';
+    let config = null, videoConfig = null, error = '', videoError = '', loading = !!userId, loadingVideo = admin;
+    let previousVideoControls = false;
     const current = () => form.isConnected && session().epoch === epoch;
     let categoryInitialized = false;
     const categoryOptions = () => {
@@ -135,14 +194,30 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     }
     function render() {
       if (!current()) return;
-      const image = form.querySelector('#creative-type').value === 'image';
+      const image = type.value === 'image';
+      const videoEnabled = !image && !!videoConfig?.available;
       const busy = running.has(userId);
       dimensions.hidden = !image; ratio.closest('.field').hidden = image;
-      status.classList.toggle('has-error', !!error);
-      button.disabled = !image || loading || busy || !!userId && (!config?.available || !modelSelect.value);
+      countField.hidden = videoEnabled;
+      duration.closest('.field').hidden = !videoEnabled;
+      negative.hidden = videoEnabled;
+      prompt.maxLength = videoEnabled ? 2000 : 8000;
+      form.querySelector('#creative-length').textContent = prompt.value.length + ' / ' + prompt.maxLength;
+      description.textContent = image ? '描述你的画面，生成图片并保存到私有记录。' : videoEnabled ? '描述你的画面，生成视频并保存到私有记录。' : '保存视频提示词和参考图。';
+      if (videoEnabled !== previousVideoControls) {
+        ratio.innerHTML = videoEnabled ? videoRatios.map(value => `<option>${value}</option>`).join('') : draftRatios;
+        if (image) syncSize();
+        previousVideoControls = videoEnabled;
+      }
+      if (videoEnabled) ratio.value = videoRatio;
+      status.classList.toggle('has-error', !!(image ? error : videoError));
+      button.disabled = busy || (image ? loading || !!userId && (!config?.available || !modelSelect.value) : loadingVideo || !videoEnabled);
       button.title = '';
-      button.textContent = !image ? '生成视频（暂未接入）' : busy ? '正在生成图片…' : userId ? '生成图片' : '登录后生成图片';
-      if (!image) { status.textContent = '视频生成暂未接入，可继续保存视频提示词草稿。'; return; }
+      button.textContent = image ? busy ? '正在生成图片…' : userId ? '生成图片' : '登录后生成图片' : busy ? '正在提交视频…' : '生成视频';
+      if (!image) {
+        status.textContent = videoError || (loadingVideo ? '正在读取视频配置…' : videoEnabled ? busy ? '正在提交视频任务…' : '任务进度可在生成记录查看。' : '视频生成仅向已启用服务的管理员开放。');
+        return;
+      }
       if (!userId) { status.textContent = '登录后可使用生图服务，生成结果仅当前账号可见。'; return; }
       if (loading) { status.textContent = '正在读取生图配置…'; return; }
       if (error) { status.textContent = error; return; }
@@ -153,54 +228,76 @@ export function createGenerationUI({ request, session, escape, toast, completed,
       }
     }
     function fillModels() {
-      if (form.querySelector('#creative-type').value !== 'image' || !config) return;
+      if (type.value === 'video') {
+        if (videoConfig?.available) modelSelect.innerHTML = '<option value="muse-video">Muse Video</option>';
+        return;
+      }
+      if (!config) return;
       if (!config.models.length) return;
       modelSelect.innerHTML = config.models.map(model => `<option value="${escape(model.id)}" data-model-id="${escape(model.id)}">${escape(model.name)}</option>`).join('') || '<option value="">暂无可用模型</option>';
       modelSelect.value = config.models.some(model => model.id === draft.modelId) ? draft.modelId : config.defaultModel;
       syncCategory();
     }
-    form.querySelector('#creative-type').addEventListener('change', () => { fillModels(); syncSize(); render(); });
-    modelSelect.addEventListener('change', () => { syncCategory(); });
+    type.addEventListener('change', () => { videoError = ''; fillModels(); syncSize(); render(); });
+    modelSelect.addEventListener('change', () => { if (type.value === 'image') syncCategory(); });
     refreshCreator = render;
     render();
+    let lastVideoRequest;
     button.addEventListener('click', async () => {
       if (!userId) { login(); return; }
       if (running.has(userId) || !form.reportValidity()) return;
       const data = getCreative();
       if (!data.prompt) { status.textContent = '先写下一段提示词。'; return; }
       const referenceSnapshot = references().slice();
-      running.add(userId); error = ''; render();
+      const video = data.type === 'video';
+      if (video && (!videoConfig?.available || data.prompt.length > 2000)) {
+        videoError = '视频生成需要已启用的服务，提示词最多 2,000 字符。'; render(); return;
+      }
+      running.add(userId); error = ''; videoError = ''; render();
       // Capture local Files before closing the creator revokes its preview URLs.
       try {
         const files = await Promise.all(referenceSnapshot.map(async ref => {
           if (ref.file) return ref.file;
           const url = new URL(ref.url, location.origin);
-          if (url.origin !== location.origin || !/^\/(assets|media|generation-media)\//.test(url.pathname)) throw new Error('参考图地址不受支持。');
+          if (url.origin !== location.origin || !url.pathname.startsWith(appPath) ||
+            !/^(assets|media|generation-media)\//.test(url.pathname.slice(appPath.length))) throw new Error('参考图地址不受支持。');
           const response = await fetch(url, { cache: 'no-store' });
           if (!response.ok) throw new Error('参考图无法读取或无权访问，请重新添加。');
           return new File([await response.blob()], ref.name || '参考图', { type: response.headers.get('content-type')?.split(';')[0] || '' });
         }));
         if (session().epoch !== epoch) return;
         const payload = new FormData();
-        payload.set('metadata', JSON.stringify({ ...data, requestId: crypto.randomUUID() }));
+        let metadata = data, requestId = crypto.randomUUID();
+        if (video) {
+          if (files.reduce((total, file) => total + file.size, 0) > 28 * 1024 ** 2) throw new Error('视频参考图合计不能超过 28 MiB。');
+          metadata = { title: data.title, prompt: data.prompt, category: data.category, ratio: data.ratio, duration: data.requestedDuration };
+          const fingerprint = JSON.stringify([metadata, referenceSnapshot.map(ref => ref.url)]);
+          if (lastVideoRequest?.fingerprint === fingerprint) requestId = lastVideoRequest.requestId;
+          else lastVideoRequest = { fingerprint, requestId };
+        }
+        payload.set('metadata', JSON.stringify({ ...metadata, requestId }));
         for (const file of files) payload.append('files', file);
-        const response = await fetch('/api/generations', { method: 'POST', body: payload });
+        const response = await fetch(video ? '/api/video-jobs' : '/api/generations', { method: 'POST', body: payload });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || '生成失败，请稍后再试。');
         if (session().epoch !== epoch) return;
-        completed(result.generation, form.isConnected && document.querySelector('#creator').open);
+        const show = form.isConnected && document.querySelector('#creator').open;
+        if (video) { lastVideoRequest = null; videoAccepted(result.job, show); }
+        else completed(result.generation, show);
       } catch (failure) {
         if (session().epoch === epoch) {
-          error = failure.message || '生成请求中断，请先检查生成记录，避免重复生成。';
-          if (!current()) toast(error);
+          const message = failure.message || '生成请求中断，请先检查生成记录，避免重复生成。';
+          if (video) videoError = message; else error = message;
+          if (!current()) toast(message);
         }
       } finally { running.delete(userId); refreshCreator?.(); }
     });
-    if (userId) {
-      try { config = await request('/api/generation/config'); if (current()) fillModels(); }
-      catch (failure) { error = failure.message; }
-      finally { loading = false; render(); }
-    }
+    await Promise.all([
+      userId && request('/api/generation/config').then(result => { config = result; if (current() && type.value === 'image') fillModels(); })
+        .catch(failure => { error = failure.message; }).finally(() => { loading = false; render(); }),
+      admin && request(videoConfigPath).then(result => { videoConfig = result; if (current() && type.value === 'video') fillModels(); })
+        .catch(failure => { videoError = failure.message; }).finally(() => { loadingVideo = false; render(); })
+    ]);
   }
-  return { openSettings, attachCreator };
+  return { openSettings, openVideoSettings, attachCreator };
 }

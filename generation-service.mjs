@@ -37,13 +37,13 @@ function normalizeConfig(input, previous) {
   assert(typeof defaultModel === 'string' && (!normalized.length ? !defaultModel : normalized.some(model => model.id === defaultModel)), '请选择已启用的默认模型。');
   return { baseUrl, apiKey, models: normalized, defaultModel };
 }
-function redact(value, key) {
+export function redact(value, key) {
   return String(value || '').split(key || '\0').join('[已隐藏]').replace(/Bearer\s+[^\s"<>]+/gi, 'Bearer [已隐藏]').slice(0, 300);
 }
-async function readBounded(response, max) {
-  assert(Number(response.headers.get('content-length') || 0) <= max, '生图服务返回内容过大。', 502);
+export async function readBounded(response, max, service = '生图服务') {
+  assert(Number(response.headers.get('content-length') || 0) <= max, service + '返回内容过大。', 502);
   const reader = response.body?.getReader();
-  assert(reader, '生图服务没有返回内容。', 502);
+  assert(reader, service + '没有返回内容。', 502);
   let size = 0;
   const chunks = [];
   try {
@@ -51,7 +51,7 @@ async function readBounded(response, max) {
       const part = await reader.read();
       if (part.done) break;
       size += part.value.length;
-      assert(size <= max, '生图服务返回内容过大。', 502);
+      assert(size <= max, service + '返回内容过大。', 502);
       chunks.push(Buffer.from(part.value));
     }
   } finally { await reader.cancel(); }
@@ -73,7 +73,7 @@ function messageFrom(value) {
   }
   return '';
 }
-function upstreamDetail(bytes) {
+export function upstreamDetail(bytes) {
   const raw = bytes.toString('utf8').trim();
   if (!raw) return '';
   try { return messageFrom(JSON.parse(raw)); }

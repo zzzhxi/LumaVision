@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { HttpError, limits } from './storage.mjs';
 
 // Publisher fields only; file bodies are streamed into isolated temporary files.
-export async function readMultipart(req) {
+export async function readMultipart(req, {maxBytes=limits.total+1024**2}={}) {
   const match=/^multipart\/form-data;\s*boundary=(?:"([^"\r\n]+)"|([^;\s]+))$/i.exec(req.headers['content-type']||'');
   const boundary=match?.[1]||match?.[2];
   if(!boundary||boundary.length>200)throw new HttpError(400,'上传边界不正确。');
@@ -27,9 +27,9 @@ export async function readMultipart(req) {
     part=null;
   }
   try{
-    if(Number(req.headers['content-length'])>limits.total+1024**2)throw new HttpError(413,'上传内容过大。');
+    if(Number(req.headers['content-length'])>maxBytes)throw new HttpError(413,'上传内容过大。');
     for await(const chunk of req){
-      total+=chunk.length;if(total>limits.total+1024**2)throw new HttpError(413,'上传内容过大。');
+      total+=chunk.length;if(total>maxBytes)throw new HttpError(413,'上传内容过大。');
       buffer=Buffer.concat([buffer,chunk]);
       while(true){
         if(phase==='initial'){

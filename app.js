@@ -186,6 +186,8 @@ function clearPrivateSession(){
   clearTimeout(adminSearchTimer);adminSearchTimer=null;
   gallerySeq++;galleryKey='';galleryLoading=false;galleryHistory=[];galleryCursor=null;galleryCurrentCursor=null;galleryTotal=0;
   state.myWorks=[];state.generations=[];state.reviewPending=[];state.reviewRejected=[];state.reviewWithdrawn=[];state.creatorPending=[];
+  for(const {id} of videoJobs){cardNodes.get(id)?.remove();cardNodes.delete(id);cardMarks.delete(id);}
+  videoJobs=[];videoJobsError=false;videoJobsSeq++;clearTimeout(videoJobsTimer);
   state.adminUsers=[];state.adminUserTotal=0;state.adminUserPages=1;state.adminUserCounts=null;state.adminUserError='';
   state.adminUserFilters={q:'',role:'all',status:'all',creatorStatus:'all',kind:'all',page:1};state.adminTab='users';
   state.userWorks=[];state.viewUser=null;state.userViewId=null;state.generationError=false;
@@ -239,15 +241,40 @@ async function loadMyWorks(){
   if(state.view==='profile')renderPageView();
   if(location.hash.startsWith('#prompt/'))route();
 }
-async function loadGenerations(){
+const videoJobLabels={accepted:'等待提交',submitting:'正在提交',queued:'Muse 排队中',processing:'正在生成视频',saving:'正在保存成片',failed:'生成失败',submission_unknown:'提交结果待确认'};
+const videoJobActive=job=>job.status!=='failed'&&job.status!=='submission_unknown';
+const isVideoJobView=()=>state.view==='drafts'&&state.studioTab==='generations'&&state.user?.role==='admin';
+let videoJobs=[],videoJobsTimer,videoJobsSeq=0,videoJobsError=false;
+async function loadVideoJobs(){
+  clearTimeout(videoJobsTimer);
+  const epoch=sessionEpoch,seq=++videoJobsSeq;
+  if(state.user?.role!=='admin')return;
+  const current=()=>sessionEpoch===epoch&&seq===videoJobsSeq&&state.user?.role==='admin';
+  try{
+    const data=await requestJson('/api/video-jobs');
+    if(!current())return;
+    const next=data.jobs,ids=new Set(next.map(job=>job.id));
+    const completed=videoJobs.some(job=>videoJobActive(job)&&!ids.has(job.id));
+    videoJobs=next;videoJobsError=false;
+    if(completed)await loadGenerations(false);
+  }catch{
+    if(!current())return;
+    videoJobsError=true;
+  }
+  if(!current())return;
+  if(isVideoJobView())render();
+  if(videoJobs.some(videoJobActive)||videoJobsError)videoJobsTimer=setTimeout(loadVideoJobs,5000);
+}
+async function loadGenerations(includeVideoJobs=true){
   const userId=state.user?.id,seq=++generationSeq;if(!userId)return;
+  if(includeVideoJobs&&state.user.role==='admin')void loadVideoJobs();
   try{
     const data=await requestJson('/api/user/generations');
     if(state.user?.id!==userId||seq!==generationSeq)return;
     state.generations=Array.isArray(data.generations)?data.generations:[];state.generationError=false;
   }catch{
     if(state.user?.id!==userId||seq!==generationSeq)return;
-    state.generationError=true;$('#studio-status').textContent='暂时无法读取生成记录，请刷新页面重试。';
+    state.generationError=true;
   }
   render();
   if(location.hash.startsWith('#prompt/'))route();
@@ -288,6 +315,17 @@ const generationUI=createGenerationUI({
     render();toast('图片已生成，保存在私有生成记录中。');
     if(show){$('#creator').close();openPrompt(record.id);}
     loadGenerations();
+  },
+  videoAccepted:(job,show)=>{
+    if(job.status!=='succeeded')videoJobs=[job,...videoJobs.filter(item=>item.id!==job.id)];
+    if(show){
+      $('#creator').close();
+      state.studioTab='generations';write('studio-tab',state.studioTab);go('drafts');
+    }else if(isVideoJobView())render();
+    if(job.status==='succeeded')void loadGenerations(false);
+    else if(videoJobActive(job))toast('视频任务已提交，可在生成记录查看进度。');
+    else toast(job.error||videoJobLabels[job.status]);
+    void loadVideoJobs();
   }
 });
 let afterLogin=null;
@@ -548,7 +586,7 @@ function adminShell(content){
     ['users','用户管理',counts?.total],
     ['works','作品审核',state.reviewTotal??state.reviewPending?.length],
     ['creators','创作者申请',state.creatorPending?.length],
-    ['generation','生图服务',null]
+    ['generation','生成服务',null]
   ];
   return `<div class="page-wrap">
     <button class="page-back" data-action="back-page">← 返回</button>
@@ -661,6 +699,9 @@ function renderAdminPage(){
   host.innerHTML=adminShell(`<section class="card-block admin-generation-card">
     <div><h3 class="block-title">生图服务</h3><p class="profile-hint">由管理员统一配置 API 地址、密钥和可用模型；配置只保存在本机私有文件中。</p></div>
     <button class="button dark" data-action="generation-settings">${icon('sliders')}打开生图配置</button>
+  </section><section class="card-block admin-generation-card">
+    <div><h3 class="block-title">视频服务</h3><p class="profile-hint">通过本机 Muse 视频服务生成，仅管理员可试用。</p></div>
+    <button class="button dark" data-action="video-generation-settings">${icon('sliders')}打开视频配置</button>
   </section>`);
   decorate(host);
 }
@@ -974,7 +1015,9 @@ function results() {
     const works=state.user?[...state.myWorks,...state.works.filter(p=>p.uploaded&&!p.authorId)]:[];
     items=[...new Map(works.map(p=>[p.id,p])).values()].filter(p=>matches(p)&&(state.workStatus==='all'?p.status!=='withdrawn':p.status===state.workStatus));
   }else if(state.view==='drafts'){
-    items=studioItems({tab:state.studioTab,drafts:state.drafts,generations:state.generations,works:state.myWorks,userId:state.user?.id}).filter(matches);
+    items=studioItems({tab:state.studioTab,drafts:state.drafts,generations:state.generations,works:state.myWorks,userId:state.user?.id});
+    if(isVideoJobView())items=items.concat(videoJobs.map(job=>({...job,type:'video',tags:[],videoJob:true})));
+    items=items.filter(matches);
   }else{
     items=allPrompts().filter(p=>(state.view !== 'collections' || state.saved.has(p.id)) && (state.view !== 'recent' || p.uploaded) && matches(p));
   }
@@ -1001,6 +1044,7 @@ function workControls(p){
   return edit+`<button data-work-withdraw="${escape(p.id)}" data-tooltip="下架作品" aria-label="下架${escape(p.title)}">${icon('withdraw')}</button>`;
 }
 function cardMarkup(p){
+  if(p.videoJob)return videoJobCardMarkup(p);
   const draftClass=p.status==='draft'?' publishing-draft':p.custom&&!p.uploaded?' draft-card':'';
   const badge=p.custom?(p.uploaded?statusBadge(p):'<span class="draft-badge">草稿</span>'):`<span class="card-likes" title="示例热度">${icon('heart')}${p.likes+(state.saved.has(p.id)?1:0)}</span>`;
   const author=p?.authorProfile||(p?.authorId&&p.authorId===state.user?.id?state.user:{id:p?.authorId||p?.id,nickname:p?.author||(p?.custom?'我':'Luma Studio')});
@@ -1018,6 +1062,27 @@ function cardMarkup(p){
   const visual=`<div class="card-visual" style="--card-color:${/^#[0-9a-f]{6}$/i.test(p.color)?p.color:'#a6b3c5'}"><button class="card-open" data-open="${escape(p.id)}" aria-label="查看${escape(p.title)}提示词">${cardMedia(p)}</button><span class="card-tag">${p.generated?'生成记录':p.status==='withdrawn'?'已下架':p.uploaded?(p.media?.some(m=>m.type==='video')?icon('video')+' 视频作品':'上传作品'):p.type==='video'?icon('video')+' 视频分镜':p.custom?'我的创作':escape(p.category)}</span>${p.type==='video'&&(!p.custom||p.media?.some(media=>media.type==='video'))?`<span class="play-circle">${icon('play')}</span>`:''}<span class="card-model"><span class="model-dot"></span>${escape(p.model)}</span>${p.media?.length?`<span class="media-count">${p.mediaCount||p.media.length} 个附件</span>`:p.duration?`<span class="card-duration">${escape(p.duration)}</span>`:''}${withdrawn?quick:''}</div>`;
   const meta=`<div class="card-meta"><div class="card-title-row"><h3 class="card-title"><button data-open="${escape(p.id)}">${escape(p.title)}</button></h3>${badge}</div><p class="card-subtitle">${escape(p.subtitle)}</p></div>`;
   return `<article class="card${draftClass}${p.uploaded?' own-work':''}" data-id="${escape(p.id)}">${visual}${meta}${withdrawn?`<p class="withdrawn-note">下架原因：${escape(p.withdrawnNote)}</p>`:quick}</article>`;
+}
+const videoJobTime=new Intl.RelativeTimeFormat('zh-CN');
+function videoJobCardMarkup(job){
+  const active=videoJobActive(job),progress=Math.round(job.progress);
+  const title=escape(job.title),created=new Date(job.created);
+  const minutes=Math.max(0,Math.floor((Date.now()-job.created)/60_000));
+  const age=minutes>=1440?videoJobTime.format(-Math.floor(minutes/1440),'day'):
+    minutes>=60?videoJobTime.format(-Math.floor(minutes/60),'hour'):
+    minutes?videoJobTime.format(-minutes,'minute'):'刚刚';
+  const details=[job.duration?`目标 ${job.duration} 秒`:'',escape(job.ratio||''),
+    `<time datetime="${created.toISOString()}" title="${escape(created.toLocaleString('zh-CN'))}">${escape(age)}</time>`].filter(Boolean).join(' · ');
+  return `<article class="video-job${active?'':' is-stopped'}" data-id="${escape(job.id)}">
+    <div class="video-job-preview" aria-hidden="true">${icon('video')}</div>
+    <div class="video-job-body">
+      <h3 class="video-job-title">${title}</h3>
+      <p class="video-job-details">${details}</p>
+      <div class="video-job-state"><span>${escape(videoJobLabels[job.status]||job.status)}</span>${active?`<span aria-hidden="true">${progress}%</span>`:''}</div>
+      ${active?`<progress max="100" value="${progress}" aria-label="${title}生成进度"></progress>`:''}
+      ${job.error?`<p class="video-job-error">${escape(job.error)}</p>`:''}
+    </div>
+  </article>`;
 }
 const cardNodes=new Map(),cardMarks=new Map();
 function hydrateCard(card,p){
@@ -1107,7 +1172,13 @@ function render() {
   $('.work-status-tabs').hidden=state.view!=='creations';
   $('.studio-tabs').hidden=state.view!=='drafts';
   document.querySelectorAll('[data-studio-tab]').forEach(button=>{const active=button.dataset.studioTab===state.studioTab;button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));});
-  $('#studio-status').hidden=!state.generationError||state.view!=='drafts'||state.studioTab==='drafts';
+  const studioStatus=$('#studio-status');
+  const studioMessage=[
+    state.generationError&&state.view==='drafts'&&state.studioTab!=='drafts'?'暂时无法读取生成记录，请刷新页面重试。':'',
+    videoJobsError&&isVideoJobView()?'暂时无法更新视频任务，稍后自动重试。':''
+  ].join('');
+  if(studioStatus.textContent!==studioMessage)studioStatus.textContent=studioMessage;
+  studioStatus.hidden=!studioMessage;
   $('.category-list').innerHTML=categories.map(cat=>`<button data-category="${escape(cat)}" class="${cat===state.category?'active':''}" aria-pressed="${cat===state.category}">${escape(cat)}</button>`).join('');
   renderGallery(items);
   let pager=$('#gallery-pager');if(!pager){pager=document.createElement('div');pager.id='gallery-pager';pager.className='gallery-pager';$('#cards').after(pager);}
@@ -1146,7 +1217,7 @@ function setView(view) {
   document.body.classList.toggle('view-secondary',state.view!=='explore');
   document.body.classList.toggle('view-page',isPage);
   $('#page-view').hidden=!isPage;
-  const copy={explore:['发现灵感，<span>即刻开始。</span>','看见喜欢的画面，让它成为你的创作起点。','灵感画廊'],collections:['喜欢的，<span>都在这里。</span>','收藏触动你的画面，也留住属于自己的创意。','我的收藏'],recent:['新鲜灵感，<span>正在更新。</span>','最新上传的图片与视频，按时间倒序排列。','最近更新'],creations:['你的想法，<span>你的作品。</span>','管理发布草稿、审核状态、已发布与下架作品。','我的作品'],drafts:['创作，从<span>一个想法开始。</span>','打磨提示词、整理参考图，在这里开始创作和管理草稿。','创作台'],profile:['你的空间，<span>由此开始。</span>','管理昵称、社交主页与作品审核状态。','个人资料'],review:['作品审核，<span>一目了然。</span>','通过或驳回用户提交的上传作品。','审核管理'],admin:['管理后台，<span>一处处理。</span>','管理账号、审核作品与创作者申请，并配置生图服务。','管理后台']}[state.view];
+  const copy={explore:['发现灵感，<span>即刻开始。</span>','看见喜欢的画面，让它成为你的创作起点。','灵感画廊'],collections:['喜欢的，<span>都在这里。</span>','收藏触动你的画面，也留住属于自己的创意。','我的收藏'],recent:['新鲜灵感，<span>正在更新。</span>','最新上传的图片与视频，按时间倒序排列。','最近更新'],creations:['你的想法，<span>你的作品。</span>','管理发布草稿、审核状态、已发布与下架作品。','我的作品'],drafts:['创作，从<span>一个想法开始。</span>','打磨提示词、整理参考图，在这里开始创作和管理草稿。','创作台'],profile:['你的空间，<span>由此开始。</span>','管理昵称、社交主页与作品审核状态。','个人资料'],review:['作品审核，<span>一目了然。</span>','通过或驳回用户提交的上传作品。','审核管理'],admin:['管理后台，<span>一处处理。</span>','管理账号、审核作品与创作者申请，并配置生成服务。','管理后台']}[state.view];
   $('#page-title').innerHTML=copy[0];$('.intro-copy').textContent=copy[1];$('#gallery-title').textContent=copy[2];
   state.query='';state.category='全部灵感';state.type='all';state.model='all';state.workStatus='all';$('#search').value='';
   render();
@@ -1211,17 +1282,17 @@ async function openPrompt(id){
 }
 let creativeDraftId=null,creativeRefs=[],creativeSession=0,creativeEdited=false;
 const imageModels=['GPT Image','Nano Banana','Midjourney','FLUX','Seedream'];
-const videoModels=['Seedance','Kling','Wan','Hailuo'];
+const videoModels=['Seedance','Kling','Wan','Hailuo','Muse Video'];
 function creativeModels(type){return [...(type==='video'?videoModels:imageModels)];}
 let creativePreview=null;
-function getCreative(){return {title:$('#creative-title').value.trim(),prompt:$('#creative-prompt').value.trim(),negative:$('#creative-negative').value.trim(),type:$('#creative-type').value,model:$('#creative-model').selectedOptions[0]?.textContent||'',modelId:$('#creative-type').value==='image'?$('#creative-model').selectedOptions[0]?.dataset.modelId:undefined,modelCategory:$('#creative-model-category')?.value||'',width:Number($('#creative-width')?.value)||1024,height:Number($('#creative-height')?.value)||1024,ratio:$('#creative-ratio').value,category:$('#creative-category').value,count:Number($('#creative-count').value),previewImage:creativePreview?.url||null,previewLabel:creativePreview?.label||null,sourceId:creativePreview?.sourceId||null,references:creativeRefs.filter(ref=>!ref.file).map(({url,name,sourceId})=>({url,name,sourceId}))};}
+function getCreative(){return {title:$('#creative-title').value.trim(),prompt:$('#creative-prompt').value.trim(),negative:$('#creative-negative').value.trim(),type:$('#creative-type').value,model:$('#creative-model').selectedOptions[0]?.textContent||'',modelId:$('#creative-type').value==='image'?$('#creative-model').selectedOptions[0]?.dataset.modelId:undefined,modelCategory:$('#creative-model-category')?.value||'',width:Number($('#creative-width')?.value)||1024,height:Number($('#creative-height')?.value)||1024,ratio:$('#creative-ratio').value,requestedDuration:$('#creative-type').value==='video'?Number($('#creative-duration')?.value)||5:undefined,category:$('#creative-category').value,count:Number($('#creative-count').value),previewImage:creativePreview?.url||null,previewLabel:creativePreview?.label||null,sourceId:creativePreview?.sourceId||null,references:creativeRefs.filter(ref=>!ref.file).map(({url,name,sourceId})=>({url,name,sourceId}))};}
 function storeCreative(data,id=null){
   if(!data.prompt){toast('先写下一段提示词。');return null;}
   const existing=state.drafts.find(item=>item.id===id);
   const item={...existing,...data,title:data.title||'未命名创作',id:existing?.id||`custom-${crypto.randomUUID()}`,custom:true,uploaded:false,author:'我',subtitle:'个人创作草稿',tags:[data.category],likes:0,color:'#a6b3c5',created:Date.now()};
   const next=[item,...state.drafts.filter(draft=>draft.id!==item.id)];if(!write('drafts',next))return null;state.drafts=next;render();return item;
 }
-function persistCreative(edited=true){creativeEdited=edited;$('#creative-status').textContent=edited?'尚未保存':creativeDraftId?'已保存草稿':'新建创作';$('#creative-length').textContent=$('#creative-prompt').value.length+' / 8000';}
+function persistCreative(edited=true){creativeEdited=edited;const prompt=$('#creative-prompt');$('#creative-status').textContent=edited?'尚未保存':creativeDraftId?'已保存草稿':'新建创作';$('#creative-length').textContent=prompt.value.length+' / '+prompt.maxLength;}
 function renderCreativeRefs(){
   $('#creative-references').innerHTML=creativeRefs.map((ref,index)=>`<div class="creative-reference"><img src="${escape(ref.url)}" alt="参考图：${escape(ref.name)}"><button type="button" data-remove-reference="${index}" aria-label="移除第 ${index+1} 张参考图">${icon('x')}</button><span>${escape(ref.name)}</span></div>`).join('');
   $('#creative-reference-count').textContent=`${creativeRefs.length} / 4`;
@@ -1287,10 +1358,13 @@ async function openPublisher(p=null){
   // 生图服务的模型带别称，作品按模型分类登记，保证在灵感库的模型筛选下可见。
   fillModels(draft?.modelCategory || draft?.model);
   if(draft.ratio&&/^[1-9]\d{0,3}:[1-9]\d{0,3}$/.test(draft.ratio)&&![...$('#edit-ratio').options].some(option=>option.value===draft.ratio))$('#edit-ratio').add(new Option(draft.ratio,draft.ratio,true,true));
-  uploader=createUploader($('#uploader'),p?.media||[]);
+  const uploadHost=$('#uploader');
+  uploader=createUploader(uploadHost,p?.media||[]);
+  syncPublisherModel();
+  uploadHost.addEventListener('click',syncPublisherModel);
   $('#editor').showModal();updateCount();
   $('#prompt-form').addEventListener('input',event=>{if(event.target.type==='file')return;updateCount();});
-  $('#edit-type').addEventListener('change',()=>{fillModels();$('.field-hint>span').textContent='主体 + 场景 + 光线 + 风格'+($('#edit-type').value==='video'?' + 镜头运动':'');});
+  $('#edit-type').addEventListener('change',()=>{fillModels();syncPublisherModel();$('.field-hint>span').textContent='主体 + 场景 + 光线 + 风格'+($('#edit-type').value==='video'?' + 镜头运动':'');});
   $('#prompt-import').addEventListener('change',async event=>{
     const file=event.target.files[0];if(!file)return;
     try{if(file.size>100*1024)throw new Error('提示词文件不能超过 100 KB。');const text=(await file.text()).replace(/^\uFEFF/,'').trim();if(!text||text.length>8000)throw new Error('提示词需要为 1 至 8000 字。');$('#edit-prompt').value=text;updateCount();$('#publish-error').hidden=true;}
@@ -1303,6 +1377,14 @@ function lockComposer(value){
   publishing=value;$('#editor').setAttribute('aria-busy',String(value));
   $('#prompt-form').querySelectorAll('input,textarea,select,button').forEach(el=>el.disabled=value);
   $('#editor [data-close]').disabled=value;uploader?.setDisabled(value);
+  if(!value)syncPublisherModel();
+}
+function syncPublisherModel(){
+  if(editingRecord?.modelId!=='muse-video')return;
+  const sourceIds=editingRecord.generated?editingRecord.media.map(media=>media.id):editingRecord.generationMediaIds||[];
+  const locked=uploader?.entries.some(media=>sourceIds.includes(media.id));
+  if(locked)fillModels('Muse Video');
+  $('#edit-model').disabled=publishing||!!locked;
 }
 function fillModels(selected){const models=creativeModels($('#edit-type').value);if(selected&&!models.includes(selected))models.unshift(selected);$('#edit-model').innerHTML=models.map(m=>'<option '+(selected===m?'selected':'')+'>'+escape(m)+'</option>').join('');}
 function updateCount(){$('#char-count').textContent=$('#edit-prompt').value.length+' / 8000';}
@@ -1392,6 +1474,7 @@ document.addEventListener('click',event=>{
     case 'admin-users-prev':if(state.adminUserFilters.page>1){state.adminUserFilters.page--;refreshAdminUsers();}break;
     case 'admin-users-next':if(state.adminUserFilters.page<state.adminUserPages){state.adminUserFilters.page++;refreshAdminUsers();}break;
     case 'generation-settings':generationUI.openSettings();break;
+    case 'video-generation-settings':generationUI.openVideoSettings();break;
     case 'edit-nickname':openNickname();break;
     case 'change-password':openPassword();break;
     case 'edit-social':openSocial(false);break;

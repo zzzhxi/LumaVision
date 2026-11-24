@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, rename, unlink, readdir, stat } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, unlink, stat, open, copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { identify, limits, HttpError } from './storage.mjs';
@@ -6,7 +6,8 @@ import { createRecordIndex, limitedRead } from './record-index.mjs';
 import { withWriteLock } from './write-lock.mjs';
 
 const idRule=/^generation-[0-9a-f-]{36}$/;
-const fileRule=/^[0-9a-f-]{36}\.(jpg|png|webp|gif)$/;
+export const generatedMediaExtension='jpg|png|webp|gif|mp4|webm';
+const fileRule=new RegExp('^[0-9a-f-]{36}\\.('+generatedMediaExtension+')$');
 const assert=(condition,message,status=400)=>{if(!condition)throw new HttpError(status,message);};
 const text=(value,max)=>{assert(typeof value==='string'&&value.trim().length>0&&value.length<=max,'生成结果信息不完整。');return value.trim();};
 
@@ -61,8 +62,38 @@ export function createGenerationStore(root){
       };
       const next=queue.then(()=>withWriteLock(root,id,save));queue=next.catch(()=>{});return next;
     },
-    async imageFile(media){
-      assert(fileRule.test(media.id),'生成图片不存在。',404);
+    async recordVideo(job,file){
+      await ready;
+      assert(idRule.test(job.generationId),'生成记录编号不正确。');
+      const existing=await get(job.generationId);
+      if(existing)return existing;
+      assert(file.size>0&&file.size<=limits.video,'生成视频为空或超过 100 MiB。',413);
+      const handle=await open(file.path,'r'),bytes=Buffer.alloc(Math.min(file.size,256));
+      try{await handle.read(bytes);}finally{await handle.close();}
+      const format=identify(bytes);
+      assert(format?.type==='video','生成结果必须是有效的 MP4 或 WebM。',415);
+      const id=job.generationId,name=id.slice('generation-'.length)+'.'+format.ext;
+      const target=join(mediaDir,name),temp=join(recordsDir,id+'.video.tmp');
+      const media={id:name,url:'/generation-media/'+name,type:'video',mime:format.mime,name:'生成视频.'+format.ext,size:file.size,hash:file.hash};
+      const created=Date.now(),record={id,title:job.title,prompt:job.prompt,model:job.model,modelId:job.modelId,category:job.category,
+        ratio:job.ratio,requestedDuration:job.duration,provider:'Muse',providerResultId:job.upstreamId,generated:true,type:'video',
+        status:'succeeded',authorId:job.authorId,author:job.author,media:[media],tags:[job.category],likes:0,
+        subtitle:'创作台生成视频',created,updated:created,color:'#a6b3c5'};
+      try{
+        // The one video worker uses a stable file name and can recover before the record commit.
+        await copyFile(file.path,target);
+        await writeFile(temp,JSON.stringify(record,null,2));
+        await rename(temp,join(recordsDir,id+'.json'));
+      }catch(error){
+        await Promise.all([target,temp].map(path=>unlink(path).catch(failure=>{if(failure.code!=='ENOENT')throw failure;})));
+        throw error;
+      }
+      index.upsert(record);
+      return record;
+    },
+    async outputFile(media){
+      assert(fileRule.test(media.id),'生成媒体不存在。',404);
+      if(media.type==='video')return {tempPath:join(mediaDir,media.id),name:media.name,type:media.mime,size:media.size,hash:media.hash};
       return new File([await readFile(join(mediaDir,media.id))],media.name,{type:media.mime});
     },
     // 仅记录作者可以删除；先移除记录，再清理原图，避免记录指向已删除的文件。
@@ -76,17 +107,17 @@ export function createGenerationStore(root){
         try{await unlink(join(recordsDir,id+'.json'));}
         catch(error){if(error.code==='ENOENT')throw new HttpError(404,'生成记录不存在。');throw error;}
         index.invalidate();
-        await Promise.all(record.media.map(media=>unlink(join(mediaDir,media.id)).catch(error=>{if(error.code!=='ENOENT')console.warn('generations: 生成图片清理失败',media.id,error.code);})));
+        await Promise.all(record.media.map(media=>unlink(join(mediaDir,media.id)).catch(error=>{if(error.code!=='ENOENT')console.warn('generations: 生成媒体清理失败',media.id,error.code);})));
         return record;
       });
     },
     async media(name){
-      assert(fileRule.test(name),'生成图片不存在。',404);
+      assert(fileRule.test(name),'生成媒体不存在。',404);
       await ready;
       const owners=await index.owners(name);
-      assert(owners?.size===1,'生成图片不存在。',404);
+      assert(owners?.size===1,'生成媒体不存在。',404);
       const record=await get([...owners][0]);
-      assert(record?.media?.some(media=>media.id===name),'生成图片不存在。',404);
+      assert(record?.media?.some(media=>media.id===name),'生成媒体不存在。',404);
       const path=join(mediaDir,name),info=await stat(path);
       return {path,size:info.size,authorId:record.authorId};
     }

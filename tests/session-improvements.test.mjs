@@ -13,6 +13,9 @@ test('actual session functions clear private state and reject late responses in 
     const response=new Promise(resolve=>release=resolve);
     const context={state,prompts:[],workMap:new Map(),workMapSources:[],sessionEpoch:0,detailSeq:0,pageSeq:0,adminUsersSeq:0,adminSearchTimer:null,generationSeq:0,gallerySeq:0,galleryKey:'private',galleryLoading:true,galleryHistory:['private'],galleryCursor:'private',galleryCurrentCursor:'private',galleryTotal:5,userCursor:'private',userHistory:['private'],userCurrentCursor:'private',currentPrompt:privateWork,editingRecord:privateWork,editingId:'private',removedDraft:privateWork,lastSubmission:privateWork,invalidateWorkReads(){},clearTimeout(){},
       $(selector){if(!dialogs.has(selector))dialogs.set(selector,{open:false,innerHTML:'PRIVATE_SENTINEL',hidden:false,replaceChildren(){this.innerHTML='';}});return dialogs.get(selector);},fetch:()=>response};
+    const videoCard={textContent:'PRIVATE_SENTINEL',remove(){this.textContent='';}};
+    Object.assign(context,{videoJobs:[{id:'video-private',title:'PRIVATE_SENTINEL'}],videoJobsSeq:0,videoJobsTimer:null,videoJobsError:true,
+      cardNodes:new Map([['video-private',videoCard]]),cardMarks:new Map([['video-private','PRIVATE_SENTINEL']])});
     runInNewContext(extract('function findWork(id){','const SOCIAL_PLATFORMS')+extract('function clearPrivateSession(){','function invalidateWorkReads()')+extract('async function requestJson(url,options={}){','async function loadSession()'),context);
     assert.equal(context.findWork('work-private').prompt,'PRIVATE_SENTINEL');
     const reading=context.requestJson('/api/works/work-private');
@@ -22,5 +25,7 @@ test('actual session functions clear private state and reject late responses in 
     for(const key of ['myWorks','generations','reviewPending','reviewRejected','creatorPending','userWorks'])assert.equal(state[key].length,0);
     assert.equal(context.currentPrompt,null);assert.equal(context.editingRecord,null);assert.equal(context.galleryTotal,0);
     assert.equal(dialogs.get('#detail').innerHTML,'');assert.equal(dialogs.get('#page-view').innerHTML,'');
+    assert.equal(context.videoJobs.length,0);assert.equal(context.videoJobsError,false);
+    assert.equal(videoCard.textContent,'');assert.equal(context.cardNodes.size,0);assert.equal(context.cardMarks.size,0);
   }
 });

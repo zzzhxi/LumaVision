@@ -569,6 +569,21 @@ body:has(.creation-nav [data-view=drafts].active) .cards{display:grid;grid-templ
 .admin-user-actions .button.danger:hover{background:#f7dedc}
 .admin-generation-card{flex-direction:row;align-items:center;justify-content:space-between;gap:18px}
 .admin-generation-card .profile-hint{margin:6px 0 0;max-width:560px}
+.video-job{min-width:0;overflow:hidden;border:1px solid #e4e6f0;border-radius:13px;background:#fff}
+.video-job-preview{aspect-ratio:16/7;min-height:74px;display:grid;place-items:center;position:relative;background:#eff0fa;color:#5964bd}
+.video-job-preview svg{width:23px;height:23px}
+.video-job:not(.is-stopped) .video-job-preview::after{content:'';position:absolute;width:42px;height:42px;border:2px solid #d1d5ef;border-top-color:currentColor;border-radius:50%;animation:video-job-spin 1.3s linear infinite}
+@keyframes video-job-spin{to{transform:rotate(360deg)}}
+.video-job-body{padding:12px 14px 14px}
+.video-job-title{margin:0;color:#272e42;font-size:14px;line-height:1.5;overflow-wrap:anywhere}
+.video-job-details{margin:3px 0 0;color:#59637a;font-size:11px;line-height:1.6}
+.video-job-details time{white-space:nowrap}
+.video-job-state{display:flex;justify-content:space-between;align-items:baseline;gap:6px;margin-top:10px;color:#4753a4;font-size:11px;font-weight:650;font-variant-numeric:tabular-nums}
+.video-job progress{display:block;width:100%;height:6px;margin-top:6px;accent-color:#5b66c2}
+.video-job.is-stopped .video-job-preview{background:#f8edef;color:#9e404c}
+.video-job.is-stopped .video-job-state,.video-job-error{color:#9e404c}
+.video-job-error{margin:5px 0 0;font-size:11px;line-height:1.6;overflow-wrap:anywhere}
+@media(max-width:580px){.video-job{border-radius:10px}.video-job-body{padding:9px 10px 11px}}
 @media(max-width:900px){
 .admin-filter-grid{grid-template-columns:1fr 1fr}
 .admin-user-row{grid-template-columns:auto minmax(0,1fr) auto;gap:9px}
@@ -665,6 +680,7 @@ dialog.closing::backdrop{animation:backdrop-exit .28s cubic-bezier(.645,.045,.35
 .visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
 
 @media(prefers-reduced-motion:reduce){
+  .video-job:not(.is-stopped) .video-job-preview::after{animation:none}
   .reveal{opacity:1;transform:none}
   dialog[open],dialog[open]::backdrop,dialog.closing,dialog.closing::backdrop,.toast.show,.toast.show::after,.save-pop>svg,.save-undo>svg,.save-pop>span,.save-undo>span,.save-burst:before,.save-burst:after{animation:none}
   .toast,.card,.admin-tab,.admin-tab:after,.topbar nav .nav-link:not(.active):after,.sidebar-about:after,.reveal,.motion-indicator{transition:none}

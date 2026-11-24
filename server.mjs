@@ -5,8 +5,9 @@ import { createBrotliCompress, createGzip, constants as zlibConstants } from 'no
 import { resolve, extname, isAbsolute, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createStore, HttpError, limits } from './storage.mjs';
-import { createGenerationStore } from './generations.mjs';
+import { createGenerationStore, generatedMediaExtension } from './generations.mjs';
 import { createGenerationService } from './generation-service.mjs';
+import { createVideoGeneration } from './video-generation.mjs';
 import { queryWorks, workCard } from './work-query.mjs';
 import { readMultipart } from './multipart.mjs';
 import { createDerivatives } from './derivatives.mjs';
@@ -18,6 +19,7 @@ const root=resolve(import.meta.dirname);
 const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.jpg':'image/jpeg','.webp':'image/webp','.png':'image/png','.gif':'image/gif','.mp4':'video/mp4','.webm':'video/webm'};
 const publicFiles=new Set(['/index.html','/styles.css','/uploads.css','/auth.css','/auth-ui.js','/app.js','/studio.js','/generation-ui.js','/drafts.js','/media.js','/data.js','/email-domains.js','/favicon.svg']);
 const compressibleType=/^(?:text\/|application\/(?:javascript|json)|image\/svg\+xml)/;
+const generatedThumbnailPath=new RegExp('^/generation-thumbnails/([0-9a-f-]{36}\\.(?:'+generatedMediaExtension+'))/(320|640|1280)\\.jpg$');
 // 只按客户端明确声明的编码压缩，q=0 视为不支持。
 function acceptedEncoding(req){
   const header=String(req?.headers?.['accept-encoding']||'');
@@ -121,7 +123,7 @@ function serveFile(req,res,file,size,mtimeMs){
   if(req.method==='HEAD'||!size){res.end();return;}
   const stream=createReadStream(file,{start,end});stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());stream.pipe(res);
 }
-export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,sendAuthCode,ffmpeg,generationFetch,generationTimeoutMs,captchaFactory,registrationEmailDomains}={}){
+export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,sendAuthCode,ffmpeg,generationFetch,generationTimeoutMs,videoFetch,videoPollMs,videoWaitMs,captchaFactory,registrationEmailDomains}={}){
   let publicSite;
   if(publicOrigin!==undefined&&URL.canParse(publicOrigin))publicSite=new URL(publicOrigin);
   if(publicOrigin!==undefined&&(!publicSite||publicSite.protocol!=='https:'||
@@ -144,9 +146,10 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
   });
   const generations=createGenerationStore(storageRoot);
   const generationService=createGenerationService(storageRoot,generations,{fetchImpl:generationFetch,timeoutMs:generationTimeoutMs});
+  const videos=createVideoGeneration(storageRoot,generations,{fetchImpl:videoFetch,pollMs:videoPollMs,waitMs:videoWaitMs});
   const derivatives=createDerivatives(storageRoot,{ffmpeg});
   let activeUploads=0,uploadBytes=0;
-  await Promise.all([store.ready,auth.ready,generations.ready,derivatives.ready,generationService.ready]);
+  await Promise.all([store.ready,auth.ready,generations.ready,derivatives.ready,generationService.ready,videos.ready]);
   const assert=(condition,message,status=400)=>{if(!condition)throw new HttpError(status,message);};
   const sessionUser=async req=>auth.sessionUser(cookieValue(req,SESSION_COOKIE));
   async function withAuthors(works){
@@ -204,6 +207,40 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
         sameOrigin(req);const actor=await requireAdmin(req),input=await readJson(req,32768);
         await auth.assertActiveAdmin(actor.id);
         json(res,200,await generationService.models(input));return;
+      }
+      if(path==='/api/admin/video-generation-config'&&req.method==='GET'){
+        await requireAdmin(req);json(res,200,videos.settings());return;
+      }
+      if(path==='/api/admin/video-generation-config'&&req.method==='PUT'){
+        sameOrigin(req);const actor=await requireAdmin(req),input=await readJson(req,32768);
+        await auth.assertActiveAdmin(actor.id);
+        json(res,200,await videos.configure(input));return;
+      }
+      if(path==='/api/admin/video-generation-test'&&req.method==='POST'){
+        sameOrigin(req);const actor=await requireAdmin(req),input=await readJson(req,32768);
+        await auth.assertActiveAdmin(actor.id);
+        json(res,200,await videos.test(input));return;
+      }
+      if(path==='/api/video-jobs'&&req.method==='GET'){
+        const user=await requireAdmin(req);json(res,200,{jobs:videos.list(user.id)});return;
+      }
+      const videoJob=/^\/api\/video-jobs\/(video-[0-9a-f-]{36})$/.exec(path);
+      if(videoJob&&req.method==='GET'){
+        const user=await requireAdmin(req);json(res,200,{job:videos.get(videoJob[1],user.id)});return;
+      }
+      if(path==='/api/video-jobs'&&req.method==='POST'){
+        sameOrigin(req);const user=await requireAdmin(req);
+        const maximum=29*1024**2,reserved=Number(req.headers['content-length'])||maximum;
+        assert(reserved<=maximum,'视频参考图内容过大。',413);
+        assert(activeUploads<2&&uploadBytes+reserved<=256*1024**2,'上传繁忙，请稍后重试。',503);
+        activeUploads++;uploadBytes+=reserved;
+        let upload;
+        try{
+          upload=await readMultipart(req,{maxBytes:maximum});
+          await auth.assertActiveAdmin(user.id);
+          const job=await videos.submit(upload.metadata,upload.files,user);
+          json(res,202,{job});return;
+        }finally{activeUploads--;uploadBytes-=reserved;await upload?.cleanup();}
       }
       if(path==='/api/generation/config'&&req.method==='GET'){
         await requireUser(req);json(res,200,await generationService.settings());return;
@@ -400,19 +437,24 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
         let generation=null;
         if(metadata?.generationId){
           const record=await generations.get(metadata.generationId);
-          assert(record&&record.authorId===user.id,'只能投稿本人在创作台生成的图片。',403);
+          assert(record&&record.authorId===user.id,'只能投稿本人在创作台生成的结果。',403);
           assert(!existing||existing.generationId===record.id,'已有作品不能改为其他生成结果。',409);
           const indexes=[],usedOutputs=new Set();
           assert(Array.isArray(metadata.media),'附件信息不正确。');
           for(const item of metadata.media){
             const output=record.media.find(media=>media.id===item?.existing);
             if(!output)continue;
-            assert(!usedOutputs.has(output.id),'生成图片不能重复投稿到同一作品。');usedOutputs.add(output.id);
-            const index=files.length;files.push(await generations.imageFile(output));indexes.push(index);
+            assert(!usedOutputs.has(output.id),'生成结果不能重复投稿到同一作品。');usedOutputs.add(output.id);
+            const index=files.length;files.push(await generations.outputFile(output));indexes.push(index);
             item.file=index;delete item.existing;
           }
-          assert(indexes.length>0||existing?.generationMediaIds?.some(id=>metadata.media.some(item=>item?.existing===id)),'投稿需要保留创作台生成的图片。');
+          assert(indexes.length>0||existing?.generationMediaIds?.some(id=>metadata.media.some(item=>item?.existing===id)),'投稿需要保留创作台生成的结果。');
+          if(record.type==='video')metadata.model=record.model;
           generation={id:record.id,indexes,modelId:record.modelId};
+        }else if(existing?.modelId==='muse-video'&&existing.generationId&&Array.isArray(metadata?.media)&&
+          existing.generationMediaIds?.some(id=>metadata.media.some(item=>item?.existing===id))){
+          const record=await generations.get(existing.generationId);
+          if(record?.type==='video')metadata.model=record.model;
         }
         const work=await store.save(metadata,files,{id:user.id,nickname:user.nickname,generation});json(res,200,{work:(await withAuthors([work]))[0]});return;
         }finally{activeUploads--;uploadBytes-=reserved;await upload?.cleanup();}
@@ -432,10 +474,10 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
         json(res,200,{work:(await withAuthors([await store.setDeleted(workAction[1],!workAction[2],input.revision,user.id,{allowDeletedAuthor:user.role==='admin'&&authorDeleted})]))[0]});return;
       }
       if(!['GET','HEAD'].includes(req.method))throw new HttpError(405,'不支持此请求方式。');
-      const generatedThumbnail=/^\/generation-thumbnails\/([0-9a-f-]{36}\.(?:jpg|png|webp|gif))\/(320|640|1280)\.jpg$/.exec(path);
+      const generatedThumbnail=generatedThumbnailPath.exec(path);
       if(generatedThumbnail){
         const media=await generations.media(generatedThumbnail[1]),user=await sessionUser(req);
-        assert(user&&user.id===media.authorId,'生成图片不存在。',404);res.setHeader('Cache-Control','private, no-store');
+        assert(user&&user.id===media.authorId,'生成媒体不存在。',404);res.setHeader('Cache-Control','private, no-store');
         const file=await derivatives.file(media,generatedThumbnail[1],Number(generatedThumbnail[2]));
         serveFile(req,res,file.path,file.size);return;
       }
@@ -451,7 +493,7 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
       }
       if(path.startsWith('/generation-media/')){
         const media=await generations.media(path.slice('/generation-media/'.length)),user=await sessionUser(req);
-        assert(user&&user.id===media.authorId,'生成图片不存在。',404);
+        assert(user&&user.id===media.authorId,'生成媒体不存在。',404);
         res.setHeader('Cache-Control','private, no-store');serveFile(req,res,media.path,media.size);return;
       }
       if(path.startsWith('/media/')){
@@ -478,7 +520,8 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
     }
   });
   server.requestTimeout=300000;
-  server.on('close',()=>{store.close();generations.close();derivatives.close();});
+  server.on('listening',()=>videos.start());
+  server.on('close',()=>{videos.close();store.close();generations.close();derivatives.close();});
   return {server,store,auth,generations,metrics};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
