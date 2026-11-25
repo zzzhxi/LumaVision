@@ -1079,8 +1079,10 @@ function videoJobCardMarkup(job){
   return `<article class="video-job${active?'':' is-stopped'}" data-id="${escape(job.id)}">
     <div class="video-job-preview" aria-hidden="true">${icon('video')}</div>
     <div class="video-job-body">
-      <h3 class="video-job-title">${title}</h3>
-      <p class="video-job-details">${details}</p>
+      <div class="video-job-heading">
+        <div><h3 class="video-job-title">${title}</h3><p class="video-job-details">${details}</p></div>
+        ${active?'':`<button type="button" class="button soft video-job-delete" data-video-job-delete="${escape(job.id)}" aria-label="删除视频任务 ${title}">删除</button>`}
+      </div>
       <div class="video-job-state"><span>${escape(videoJobLabels[job.status]||job.status)}</span>${active?`<span aria-hidden="true">${progress}%</span>`:''}</div>
       ${active?`<progress max="100" value="${progress}" aria-label="${title}生成进度"></progress>`:''}
       ${job.error?`<p class="video-job-error">${escape(job.error)}</p>`:''}
@@ -1442,6 +1444,7 @@ document.addEventListener('click',event=>{
   }
   if(button.dataset.publishGeneration){const record=state.generations.find(item=>item.id===button.dataset.publishGeneration);if(record)openPublisher(record);}
   if(button.dataset.generationDelete)removeGeneration(button.dataset.generationDelete);
+  if(button.dataset.videoJobDelete)removeVideoJob(button);
   if(button.dataset.model){state.model=button.dataset.model;render();}
   if(button.dataset.apply){const p=findWork(button.dataset.apply);if(p)openCreator(p);}
   if(button.dataset.creativeEdit){const p=state.drafts.find(item=>item.id===button.dataset.creativeEdit);if(p)openCreator(p);}
@@ -1601,7 +1604,7 @@ function confirmDelete({title,description,label,confirmText}){
   const dialog=$('#confirm');
   if(dialog.open)return Promise.resolve(false);
   const requirement=confirmText?`<label class="field">输入 <strong>${escape(confirmText)}</strong> 确认<input id="confirm-text" autocomplete="off" value=""></label><p id="confirm-error" class="auth-error" role="alert" hidden></p>`:'';
-  dialog.innerHTML=`<form class="mini-form"><button type="button" class="icon-button close" data-close="confirm" aria-label="关闭">${icon('x')}</button><p class="eyebrow">PLEASE CONFIRM</p><h2 id="confirm-title">${escape(title)}</h2><p class="confirm-copy">${escape(description)}</p>${requirement}<div class="mini-form-actions"><button type="button" class="button soft" data-close="confirm">取消</button><button type="submit" class="button dark">${escape(label)}</button></div></form>`;
+  dialog.innerHTML=`<form class="mini-form"><button type="button" class="icon-button close" data-close="confirm" aria-label="关闭">${icon('x')}</button><p class="eyebrow">PLEASE CONFIRM</p><h2 id="confirm-title">${escape(title)}</h2><p class="confirm-copy">${escape(description)}</p>${requirement}<div class="mini-form-actions"><button type="button" class="button soft" data-close="confirm"${confirmText?'':' autofocus'}>取消</button><button type="submit" class="button dark">${escape(label)}</button></div></form>`;
   return new Promise(resolve=>{
     let settled=false;
     const finish=value=>{if(settled)return;settled=true;if(dialog.open)dialog.close();resolve(value);};
@@ -1626,6 +1629,23 @@ async function removeGeneration(id){
   state.generations=state.generations.filter(item=>item.id!==id);
   if(currentPrompt?.id===id&&$('#detail').open)$('#detail').close();
   render();toast('已删除生成记录');
+}
+async function removeVideoJob(button){
+  const id=button.dataset.videoJobDelete,job=videoJobs.find(item=>item.id===id),epoch=sessionEpoch;
+  if(!job||videoJobActive(job))return;
+  const description=job.status==='submission_unknown'
+    ?'删除后，本地记录无法恢复。如果 Muse 已接收任务，仍可在 Muse 中查看。'
+    :'删除后，这条失败记录无法恢复。';
+  if(!await confirmDelete({title:'删除这条视频任务？',description,label:'删除记录'})||epoch!==sessionEpoch)return;
+  button.disabled=true;
+  try{await requestJson('/api/video-jobs/'+id,{method:'DELETE'});}
+  catch(error){if(epoch===sessionEpoch)toast(error.message||'删除失败，请重试。');return;}
+  finally{button.disabled=false;}
+  if(epoch!==sessionEpoch)return;
+  videoJobs=videoJobs.filter(item=>item.id!==id);
+  if(isVideoJobView())render();
+  toast('已删除视频任务');
+  void loadVideoJobs();
 }
 function openWithdrawReason(work){
   $('#reject').innerHTML=`<form id="withdraw-form" class="mini-form"><button type="button" class="icon-button close" data-close="reject" aria-label="关闭下架作品">${icon('x')}</button><p class="eyebrow">MODERATION</p><h2 id="reject-title">下架作品</h2><p>下架后仅作品创作者本人可以管理。</p><label class="field">下架原因（创作者可见）<textarea id="withdraw-note" maxlength="200" required placeholder="请说明下架原因，最多 200 字"></textarea></label><p id="withdraw-error" class="auth-error" role="alert" hidden></p><div class="mini-form-actions"><button type="button" class="button soft" data-close="reject">取消</button><button type="submit" class="button dark">确认下架</button></div></form>`;

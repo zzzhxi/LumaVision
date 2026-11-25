@@ -65,6 +65,12 @@ export function createVideoGeneration(storageRoot, generations, { fetchImpl = fe
     status: job.status, progress: job.progress, created: job.created,
     generationId: job.status === 'succeeded' ? job.generationId : null, error: job.error || null });
 
+  function ownedJob(id, authorId) {
+    const job = jobs.get(id);
+    assert(job?.authorId === authorId && job.status !== 'deleted', '视频任务不存在。', 404);
+    return job;
+  }
+
   function serial(operation) {
     const result = queue.then(operation);
     queue = result.catch(() => {});
@@ -97,7 +103,7 @@ export function createVideoGeneration(storageRoot, generations, { fetchImpl = fe
       const job = JSON.parse(await readFile(join(directory, name), 'utf8'));
       jobs.set(job.id, job);
       if (job.status === 'submitting') await finish(job, 'submission_unknown', '提交结果待确认，请先在 Muse 检查是否已接收任务。');
-      else if (job.status !== 'accepted') await clearReferences(job);
+      else if (job.status !== 'accepted' && job.status !== 'deleted') await clearReferences(job);
     }
     for (const name of files) {
       const staged = /^(video-[0-9a-f-]{36})(?:-ref-[0-3]|\.part|\.json\.[0-9a-f-]{36}\.tmp)$/.exec(name);
@@ -279,6 +285,7 @@ export function createVideoGeneration(storageRoot, generations, { fetchImpl = fe
       return serial(async () => {
         const previous = [...jobs.values()].find(job => job.authorId === author.id && job.requestId === input.requestId);
         if (previous) {
+          assert(previous.status !== 'deleted', '这条视频任务已删除，请先在 Muse 核对原请求。', 409);
           assert(previous.requestHash === requestHash, '相同请求编号的参数不一致。', 409);
           return view(previous);
         }
@@ -298,12 +305,23 @@ export function createVideoGeneration(storageRoot, generations, { fetchImpl = fe
       });
     },
     list(authorId) {
-      return [...jobs.values()].filter(job => job.authorId === authorId && job.status !== 'succeeded').sort((a, b) => b.created - a.created).slice(0, 20).map(view);
+      return [...jobs.values()].filter(job => job.authorId === authorId && job.status !== 'succeeded' && job.status !== 'deleted')
+        .sort((a, b) => b.created - a.created).slice(0, 20).map(view);
     },
     get(id, authorId) {
-      const job = jobs.get(id);
-      assert(job?.authorId === authorId, '视频任务不存在。', 404);
-      return view(job);
+      return view(ownedJob(id, authorId));
+    },
+    remove(id, authorId) {
+      return serial(async () => {
+        const job = ownedJob(id, authorId);
+        assert(job.status === 'failed' || job.status === 'submission_unknown', '只能删除失败或提交结果待确认的视频任务。', 409);
+        await clearReferences(job);
+        // 保留原请求编号，防止网络重试重复派发。
+        const deleted = { id, authorId, requestId: job.requestId, status: 'deleted' };
+        await writeJson(jobPath(job), deleted);
+        jobs.set(id, deleted);
+        return { deleted: id };
+      });
     }
   };
 }

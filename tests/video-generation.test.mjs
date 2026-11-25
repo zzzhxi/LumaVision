@@ -34,9 +34,11 @@ async function setup(t, handler, { waitMs = 2000 } = {}) {
   const stop = () => new Promise(done => app.server.close(done));
   await start();
   t.after(async () => { await stop(); await rm(storageRoot, { recursive: true, force: true }); });
-  const cookies = {};
-  for (const name of ['admin', 'member']) {
+  const cookies = {}, users = {};
+  for (const name of ['admin', 'member', 'other-admin']) {
     const user = await app.auth.upsertByEmail(name + '@video.test', { nickname: name });
+    users[name] = user;
+    if (name === 'other-admin') await app.auth.adminUpdateUser(users.admin.id, user.id, { role: 'admin' });
     cookies[name] = 'luma_session=' + (await app.auth.createSession(user.id)).token;
   }
   async function http(path, { actor = 'admin', method = 'GET', body, headers = {} } = {}) {
@@ -87,6 +89,7 @@ test('管理员可配置视频，参考图和特殊比例送往 Muse，成片私
   const accepted = await env.submit(input, true);
   assert.equal(accepted.status, 202);
   const done = await env.until(accepted.job.id, 'succeeded');
+  assert.equal((await env.http(jobs + '/' + done.id, { method: 'DELETE' })).status, 409);
   assert.equal((await env.submit(input, true)).job.id, accepted.job.id);
   assert.equal((await env.submit({ ...input, duration: 10 }, true)).status, 409);
   assert.equal(env.calls.filter(url => url.endsWith('/videos')).length, 1);
@@ -183,12 +186,36 @@ test('派发中途重启保留待确认状态并拒绝重复派发', async t => 
   const input = metadata();
   const { job } = await env.submit(input, true);
   await env.until(job.id, 'submitting');
+  const path = jobs + '/' + job.id;
+  assert.equal((await env.http(path, { method: 'DELETE' })).status, 409);
   await env.restart();
   const unknown = await env.until(job.id, 'submission_unknown');
   assert.match(unknown.error, /先在 Muse 检查/);
   const replay = await env.submit(input, true);
   assert.equal(replay.job.id, job.id);
+  for (const [actor, status] of [[null, 401], ['member', 403], ['other-admin', 404]]) {
+    assert.equal((await env.http(path, { method: 'DELETE', actor })).status, status);
+  }
+  assert.equal((await env.http(path, { method: 'DELETE', headers: { origin: 'https://other.test' } })).status, 403);
+  const removed = await env.http(path, { method: 'DELETE' });
+  assert.equal(removed.status, 200);
+  assert.deepEqual(await removed.json(), { deleted: job.id });
+  assert.equal((await env.http(path)).status, 404);
+  assert.deepEqual((await (await env.http(jobs)).json()).jobs, []);
+  await env.restart();
+  assert.equal((await env.http(path, { method: 'DELETE' })).status, 404);
+  assert.deepEqual((await (await env.http(jobs)).json()).jobs, []);
+  assert.equal((await env.submit(input, true)).status, 409);
   assert.equal(env.calls.filter(url => url.endsWith('/videos')).length, 1);
+});
+
+test('作者可删除已明确失败的 Muse 视频任务', async t => {
+  const env = await setup(t, async () => Response.json({ error: '离线测试拒绝' }, { status: 400 }));
+  await env.configure();
+  const { job } = await env.submit(metadata());
+  await env.until(job.id, 'failed');
+  assert.equal((await env.http(jobs + '/' + job.id, { method: 'DELETE' })).status, 200);
+  assert.deepEqual((await (await env.http(jobs)).json()).jobs, []);
 });
 
 test('五种画幅均发送给 Muse，上游中断与无效成片显示失败', async t => {

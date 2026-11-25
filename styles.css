@@ -575,7 +575,11 @@ body:has(.creation-nav [data-view=drafts].active) .cards{display:grid;grid-templ
 .video-job:not(.is-stopped) .video-job-preview::after{content:'';position:absolute;width:42px;height:42px;border:2px solid #d1d5ef;border-top-color:currentColor;border-radius:50%;animation:video-job-spin 1.3s linear infinite}
 @keyframes video-job-spin{to{transform:rotate(360deg)}}
 .video-job-body{padding:12px 14px 14px}
+.video-job-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.video-job-heading>div{min-width:0}
 .video-job-title{margin:0;color:#272e42;font-size:14px;line-height:1.5;overflow-wrap:anywhere}
+.video-job .video-job-delete{flex:none;min-width:44px;min-height:44px;padding:0 10px;font-size:12px;color:#9e404c;background:#f8edef}
+.video-job .video-job-delete:hover{background:#f3e1e5}
 .video-job-details{margin:3px 0 0;color:#59637a;font-size:11px;line-height:1.6}
 .video-job-details time{white-space:nowrap}
 .video-job-state{display:flex;justify-content:space-between;align-items:baseline;gap:6px;margin-top:10px;color:#4753a4;font-size:11px;font-weight:650;font-variant-numeric:tabular-nums}

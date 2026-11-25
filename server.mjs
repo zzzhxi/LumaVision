@@ -228,6 +228,11 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
       if(videoJob&&req.method==='GET'){
         const user=await requireAdmin(req);json(res,200,{job:videos.get(videoJob[1],user.id)});return;
       }
+      if(videoJob&&req.method==='DELETE'){
+        sameOrigin(req);const user=await requireAdmin(req);
+        await auth.assertActiveAdmin(user.id);
+        json(res,200,await videos.remove(videoJob[1],user.id));return;
+      }
       if(path==='/api/video-jobs'&&req.method==='POST'){
         sameOrigin(req);const user=await requireAdmin(req);
         const maximum=29*1024**2,reserved=Number(req.headers['content-length'])||maximum;
