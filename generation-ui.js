@@ -1,6 +1,13 @@
 const imageConfigPath = '/api/admin/generation-config';
 const imageModelsPath = '/api/admin/generation-models';
 const videoConfigPath = '/api/admin/video-generation-config';
+const imageRatios = {
+  '1:1': [1024, 1024, '正方形'],
+  '9:16': [864, 1536, '竖图'],
+  '3:4': [768, 1024, '竖图'],
+  '4:3': [1024, 768, '横图'],
+  '16:9': [1536, 864, '横图']
+};
 const videoRatios = ['16:9', '9:16', '1:1', '4:3', '3:4'];
 const videoDurations = [5, 6, 8, 10];
 const appPath = new URL('./', import.meta.url).pathname;
@@ -153,21 +160,29 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
     modelSelect.closest('.field').insertAdjacentHTML('afterend', '<label class="field">模型分类<select id="creative-model-category"></select></label>');
     const categorySelect = form.querySelector('#creative-model-category');
-    const legacySizes = { '3:4': [768, 1024], '4:3': [1024, 768], '16:9': [1536, 864], '9:16': [864, 1536] };
+    const presets = Object.entries(imageRatios);
     const savedSize = [draft.width, draft.height];
-    const [width, height] = savedSize.every(value => Number.isInteger(value) && value >= 1 && value <= 9999) ? savedSize : Object.hasOwn(legacySizes, draft.ratio) ? legacySizes[draft.ratio] : [1024, 1024];
-    ratio.closest('.field').insertAdjacentHTML('afterend', `<div class="generation-dimensions"><label class="field">图片尺寸<select id="creative-size"><option value="1024x1024">正方形 · 1024 × 1024</option><option value="1024x1536">竖图 · 1024 × 1536</option><option value="1536x1024">横图 · 1536 × 1024</option><option value="custom">自定义尺寸</option></select></label><div class="generation-custom-size"><label class="field">宽度（像素）<input id="creative-width" type="number" min="1" max="9999" step="1" value="${width}"></label><label class="field">高度（像素）<input id="creative-height" type="number" min="1" max="9999" step="1" value="${height}"></label></div><p class="generation-help">可用尺寸和数量以所选模型为准。</p></div>`);
-    const size = form.querySelector('#creative-size'), dimensions = form.querySelector('.generation-dimensions');
-    size.value = ['1024x1024', '1024x1536', '1536x1024'].includes(`${width}x${height}`) ? `${width}x${height}` : 'custom';
+    const fallbackSize = Object.hasOwn(imageRatios, draft.ratio) ? imageRatios[draft.ratio] : imageRatios['1:1'];
+    const [width, height] = savedSize.every(value => Number.isInteger(value) && value >= 1 && value <= 9999) ? savedSize : fallbackSize;
+    const options = presets.map(([value, [, , label]]) => `<option value="${value}">${value} · ${label}</option>`).join('');
+    ratio.closest('.field').insertAdjacentHTML('afterend', `<div class="generation-dimensions">
+      <label class="field">图片比例<select id="creative-image-ratio" aria-describedby="creative-image-ratio-help">${options}<option value="custom">自定义尺寸</option></select></label>
+      <div class="generation-custom-size"><label class="field">宽度（像素）<input id="creative-width" type="number" min="1" max="9999" step="1" value="${width}"></label><label class="field">高度（像素）<input id="creative-height" type="number" min="1" max="9999" step="1" value="${height}"></label></div>
+      <p class="generation-help" id="creative-image-ratio-help"></p>
+    </div>`);
+    const imageRatio = form.querySelector('#creative-image-ratio'), dimensions = form.querySelector('.generation-dimensions');
+    const ratioHelp = form.querySelector('#creative-image-ratio-help');
+    imageRatio.value = presets.find(([, [w, h]]) => w === width && h === height)?.[0] ?? 'custom';
     function syncSize() {
-      const custom = size.value === 'custom';
+      const custom = imageRatio.value === 'custom';
       const image = type.value === 'image';
       form.querySelector('.generation-custom-size').hidden = !custom;
       categorySelect.closest('.field').hidden = !image;
       for (const input of dimensions.querySelectorAll('input')) { input.required = custom && image; input.disabled = !custom || !image; }
       if (!image) return;
-      if (size.value !== 'custom') {
-        const [w, h] = size.value.split('x'); form.querySelector('#creative-width').value = w; form.querySelector('#creative-height').value = h;
+      if (!custom) {
+        const [w, h] = imageRatios[imageRatio.value];
+        form.querySelector('#creative-width').value = w; form.querySelector('#creative-height').value = h;
       }
       let a = Number(form.querySelector('#creative-width').value), b = Number(form.querySelector('#creative-height').value);
       const w = a, h = b;
@@ -213,7 +228,7 @@ export function createGenerationUI({ request, session, escape, toast, completed,
       count.disabled = museImage;
       if (museImage) count.value = '1';
       categorySelect.disabled = museImage;
-      dimensions.querySelector('.generation-help').textContent = museImage ? 'Muse 按所选尺寸的宽高比构图，实际像素以成图为准。' : '可用尺寸和数量以所选模型为准。';
+      ratioHelp.textContent = museImage ? 'Muse 按所选比例构图，实际像素尺寸以成图为准。' : '可用比例和生成数量由所选模型决定。';
       duration.closest('.field').hidden = !videoEnabled;
       negative.hidden = videoEnabled;
       prompt.maxLength = videoEnabled ? 2000 : 8000;
