@@ -243,13 +243,13 @@ async function loadMyWorks(){
 }
 const videoJobLabels={accepted:'等待提交',submitting:'正在提交',queued:'Muse 排队中',processing:'正在生成视频',saving:'正在保存成片',failed:'生成失败',submission_unknown:'提交结果待确认'};
 const videoJobActive=job=>job.status!=='failed'&&job.status!=='submission_unknown';
-const isVideoJobView=()=>state.view==='drafts'&&state.studioTab==='generations'&&state.user?.role==='admin';
+const isVideoJobView=()=>state.view==='drafts'&&state.studioTab==='generations'&&Boolean(state.user);
 let videoJobs=[],videoJobsTimer,videoJobsSeq=0,videoJobsError=false;
 async function loadVideoJobs(){
   clearTimeout(videoJobsTimer);
   const epoch=sessionEpoch,seq=++videoJobsSeq;
-  if(state.user?.role!=='admin')return;
-  const current=()=>sessionEpoch===epoch&&seq===videoJobsSeq&&state.user?.role==='admin';
+  if(!state.user)return;
+  const current=()=>sessionEpoch===epoch&&seq===videoJobsSeq;
   try{
     const data=await requestJson('/api/video-jobs');
     if(!current())return;
@@ -267,7 +267,7 @@ async function loadVideoJobs(){
 }
 async function loadGenerations(includeVideoJobs=true){
   const userId=state.user?.id,seq=++generationSeq;if(!userId)return;
-  if(includeVideoJobs&&state.user.role==='admin')void loadVideoJobs();
+  if(includeVideoJobs)void loadVideoJobs();
   try{
     const data=await requestJson('/api/user/generations');
     if(state.user?.id!==userId||seq!==generationSeq)return;

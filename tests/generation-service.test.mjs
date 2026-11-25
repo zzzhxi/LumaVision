@@ -80,12 +80,13 @@ async function setup(t, { timeoutMs = 1000 } = {}) {
   return { dir, calls, users, cookies, api, generate, configure, url, get app() { return app; }, mode(value) { mode = value; }, policy(body, type) { policyBody = body; policyType = type; }, delay(value) { delay = value; }, museComplete(value) { museComplete = value; }, failNextMuseReads() { failMusePoll = failMuseDownload = true; }, async restart(onStopped) { await new Promise(done => app.server.close(done)); onStopped?.(); app = await createApp(options); await listen(); } };
 }
 
-test('Muse Image 独立配置且默认关闭，仅管理员可提交单张图片', async t => {
+test('Muse Image 由管理员配置，启用后向登录用户提供单张生成', async t => {
   const env = await setup(t);
   await env.configure();
   const config = '/api/admin/generation-config';
   const muse = { enabled: true, apiKey: museKey };
   assert.equal((await env.api(config)).body.muse.enabled, false);
+  assert.equal((await env.generate(payload({ modelId: 'muse-image' }))).status, 503);
   assert.equal((await env.api(config, { method: 'PUT', body: { muse: { ...muse, baseUrl: 'https://example.test/v1' } } })).status, 400);
   assert.equal((await env.api(config, { method: 'PUT', body: { muse }, actor: 'member' })).status, 403);
   assert.equal((await env.api('/api/admin/generation-models', { method: 'POST', body: { muse } })).status, 200);
@@ -95,10 +96,11 @@ test('Muse Image 独立配置且默认关闭，仅管理员可提交单张图片
   assert.equal(saved.body.baseUrl, 'http://image-service.test/v1');
   assert.equal(JSON.stringify(saved.body).includes(muse.apiKey), false);
   const catalogue = '/api/generation/config';
-  assert.deepEqual((await env.api(catalogue, { actor: 'member' })).body.models.map(item => item.id), [modelId]);
-  assert.equal((await env.api(catalogue)).body.models.find(item => item.id === 'muse-image').category, 'Muse Image');
-  assert.equal((await env.generate(payload({ modelId: 'muse-image' }))).status, 403);
-  assert.equal((await env.generate(payload({ modelId: 'muse-image', count: 2 }), [], 'admin')).status, 400);
+  const { body: options } = await env.api(catalogue, { actor: 'member' });
+  assert.equal(options.models.find(item => item.id === 'muse-image')?.category, 'Muse Image');
+  assert.equal(JSON.stringify(options).includes(museKey), false);
+  assert.equal((await env.generate(payload({ modelId: 'muse-image' }), [], null)).status, 401);
+  assert.equal((await env.generate(payload({ modelId: 'muse-image', count: 2 }))).status, 400);
   assert.equal((await env.generate()).status, 200);
 });
 
@@ -108,12 +110,13 @@ test('Muse Image 异步接收参考图，重启后继续单次任务并保存私
   await env.api('/api/admin/generation-config', { method: 'PUT', body: { muse: { enabled: true, apiKey: museKey } } });
   const input = payload({ modelId: 'muse-image', modelCategory: 'GPT Image', width: 1536, height: 864 });
   const reference = new File([picture], 'reference.jpg', { type: 'image/jpeg' });
-  const result = await env.generate(input, [reference], 'admin');
+  const result = await env.generate(input, [reference]);
   assert.equal(result.status, 202);
   const path = `/api/generations/muse/${input.requestId}`;
-  assert.equal((await env.api(path, { actor: 'member' })).status, 403);
-  assert.equal((await env.generate(input, [reference], 'admin')).status, 202);
-  assert.equal((await env.generate({ ...input, prompt: 'changed' }, [reference], 'admin')).status, 409);
+  assert.equal((await env.api(path, { actor: null })).status, 401);
+  assert.equal((await env.api(path)).status, 404);
+  assert.equal((await env.generate(input, [reference])).status, 202);
+  assert.equal((await env.generate({ ...input, prompt: 'changed' }, [reference])).status, 409);
   await env.api('/api/admin/generation-config', { method: 'PUT', body: { muse: { enabled: false } } });
   const now = Date.now;
   await env.restart(() => {
@@ -123,7 +126,7 @@ test('Muse Image 异步接收参考图，重启后继续单次任务并保存私
   const deadline = now() + 3000;
   let pending;
   do {
-    pending = await env.api(path);
+    pending = await env.api(path, { actor: 'member' });
     if (pending.status !== 202 || pending.body.job.status === 'processing') break;
     await new Promise(resolve => setTimeout(resolve, 10));
   } while (now() < deadline);
@@ -131,7 +134,7 @@ test('Muse Image 异步接收参考图，重启后继续单次任务并保存私
   env.museComplete(true);
   let completed;
   do {
-    completed = await env.api(path);
+    completed = await env.api(path, { actor: 'member' });
     if (completed.status !== 202) break;
     await new Promise(resolve => setTimeout(resolve, 10));
   } while (now() < deadline);
@@ -141,7 +144,7 @@ test('Muse Image 异步接收参考图，重启后继续单次任务并保存私
   assert.equal(record.provider, 'Muse');
   assert.equal(record.model, 'Muse Image');
   assert.equal(record.providerResultId, 'muse-fixture');
-  assert.equal(record.authorId, env.users.admin.id);
+  assert.equal(record.authorId, env.users.member.id);
   const submissions = env.calls.filter(call => call.url.endsWith('/images/tasks'));
   assert.equal(submissions.length, 1);
   assert.equal(env.calls.filter(call => call.url.endsWith('/v1/media/muse-fixture.jpg')).length, 2);
@@ -150,9 +153,9 @@ test('Muse Image 异步接收参考图，重启后继续单次任务并保存私
   const args = JSON.parse(submissions[0].options.body);
   assert.equal(args.aspect_ratio, '16:9');
   assert.equal(args.images[0], `data:image/jpeg;base64,${picture.toString('base64')}`);
-  assert.equal((await fetch(env.url() + record.media[0].url, { headers: { cookie: env.cookies.member } })).status, 404);
-  assert.equal((await fetch(env.url() + record.media[0].url, { headers: { cookie: env.cookies.admin, range: 'bytes=0-19' } })).status, 206);
-  assert.equal((await env.generate(payload({ modelId: 'muse-image' }), [], 'admin')).status, 503);
+  assert.equal((await fetch(env.url() + record.media[0].url, { headers: { cookie: env.cookies.admin } })).status, 404);
+  assert.equal((await fetch(env.url() + record.media[0].url, { headers: { cookie: env.cookies.member, range: 'bytes=0-19' } })).status, 206);
+  assert.equal((await env.generate(payload({ modelId: 'muse-image' }))).status, 503);
 });
 
 test('配置只允许管理员维护，连接测试不保存密钥，公开配置不暴露服务地址和密钥，重启与清除有效', async t => {

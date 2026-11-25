@@ -107,7 +107,7 @@ export function createGenerationUI({ request, session, escape, toast, completed,
       <label class="field">API Base URL<input name="baseUrl" type="url" required value="${escape(settings.baseUrl)}"></label>
       <label class="field">API Key<input name="apiKey" type="password" autocomplete="new-password" placeholder="${settings.hasApiKey ? '已配置 · 留空保留原密钥' : keyHint}"></label>
       <label class="generation-check"><input name="clearKey" type="checkbox">清除已保存的密钥</label>
-      <label class="generation-check"><input name="enabled" type="checkbox" ${settings.enabled ? 'checked' : ''}>启用${museImage ? 'Muse 生图' : '视频生成'}（仅管理员）</label>
+      <label class="generation-check"><input name="enabled" type="checkbox" ${settings.enabled ? 'checked' : ''}>为登录用户启用${museImage ? 'Muse 生图' : '视频生成'}</label>
       <button type="button" class="button soft" data-test-service>测试连接</button>
       <p role="status"></p>
       <div class="mini-form-actions"><button type="button" class="button soft" data-close="generation-settings">关闭</button><button type="submit" class="button dark">保存配置</button></div>
@@ -181,8 +181,7 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     syncSize();
     dimensions.addEventListener('input', () => { syncSize(); changed(); });
     const epoch = session().epoch, userId = session().user?.id;
-    const admin = session().user?.role === 'admin';
-    let config = null, videoConfig = null, error = '', videoError = '', loading = !!userId, loadingVideo = admin;
+    let config = null, configError = '', error = '', videoError = '', loading = !!userId;
     let previousVideoControls = false;
     const current = () => form.isConnected && session().epoch === epoch;
     const selectedModel = () => config?.models.find(model => model.id === modelSelect.value);
@@ -206,7 +205,7 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     function render() {
       if (!current()) return;
       const image = type.value === 'image';
-      const videoEnabled = !image && !!videoConfig?.available;
+      const videoEnabled = !image && !!config?.videoAvailable;
       const museImage = image && selectedModel()?.maxCount === 1;
       const busy = running.has(userId);
       dimensions.hidden = !image; ratio.closest('.field').hidden = image;
@@ -226,17 +225,18 @@ export function createGenerationUI({ request, session, escape, toast, completed,
         previousVideoControls = videoEnabled;
       }
       if (videoEnabled) ratio.value = videoRatio;
-      status.classList.toggle('has-error', !!(image ? error : videoError));
-      button.disabled = busy || (image ? loading || !!userId && (!config?.available || !modelSelect.value) : loadingVideo || !videoEnabled);
+      status.classList.toggle('has-error', !!(configError || (image ? error : videoError)));
+      button.disabled = busy || loading || !!userId && (image ? !config?.available || !modelSelect.value : !videoEnabled);
       button.title = '';
-      button.textContent = image ? busy ? '正在生成图片…' : userId ? '生成图片' : '登录后生成图片' : busy ? '正在提交视频…' : '生成视频';
+      button.textContent = image ? busy ? '正在生成图片…' : userId ? '生成图片' : '登录后生成图片' : busy ? '正在提交视频…' : userId ? '生成视频' : '登录后生成视频';
       if (!image) {
-        status.textContent = videoError || (loadingVideo ? '正在读取视频配置…' : videoEnabled ? busy ? '正在提交视频任务…' : '任务进度可在生成记录查看。' : '视频生成仅向已启用服务的管理员开放。');
+        if (!userId) { status.textContent = '登录后可使用视频生成服务，生成结果仅当前账号可见。'; return; }
+        status.textContent = videoError || configError || (loading ? '正在读取视频配置…' : videoEnabled ? busy ? '正在提交视频任务…' : '任务进度可在生成记录查看。' : '视频服务尚未启用，请联系管理员。');
         return;
       }
       if (!userId) { status.textContent = '登录后可使用生图服务，生成结果仅当前账号可见。'; return; }
       if (loading) { status.textContent = '正在读取生图配置…'; return; }
-      if (error) { status.textContent = error; return; }
+      if (error || configError) { status.textContent = error || configError; return; }
       if (busy) { status.textContent = '图片生成中，可关闭窗口；完成后会保存在生成记录。请勿重复提交。'; return; }
       status.textContent = config?.available ? '生图服务已配置。参考图仅用于生成，不会自动投稿。' : '生图服务尚未配置，请联系管理员。';
       if (session().user?.role === 'admin') {
@@ -245,7 +245,7 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     }
     function fillModels() {
       if (type.value === 'video') {
-        if (videoConfig?.available) modelSelect.innerHTML = '<option value="muse-video">Muse Video</option>';
+        if (config?.videoAvailable) modelSelect.innerHTML = '<option value="muse-video">Muse Video</option>';
         return;
       }
       if (!config) return;
@@ -267,7 +267,7 @@ export function createGenerationUI({ request, session, escape, toast, completed,
       const referenceSnapshot = references().slice();
       const video = data.type === 'video';
       const museImage = !video && selectedModel()?.maxCount === 1;
-      if (video && (!videoConfig?.available || data.prompt.length > 2000)) {
+      if (video && (!config?.videoAvailable || data.prompt.length > 2000)) {
         videoError = '视频生成需要已启用的服务，提示词最多 2,000 字符。'; render(); return;
       }
       running.add(userId); error = ''; videoError = ''; render();
@@ -322,12 +322,8 @@ export function createGenerationUI({ request, session, escape, toast, completed,
         }
       } finally { running.delete(userId); refreshCreator?.(); }
     });
-    await Promise.all([
-      userId && request('/api/generation/config').then(result => { config = result; if (current() && type.value === 'image') fillModels(); })
-        .catch(failure => { error = failure.message; }).finally(() => { loading = false; render(); }),
-      admin && request(videoConfigPath).then(result => { videoConfig = result; if (current() && type.value === 'video') fillModels(); })
-        .catch(failure => { videoError = failure.message; }).finally(() => { loadingVideo = false; render(); })
-    ]);
+    if (userId) await request('/api/generation/config').then(result => { config = result; if (current()) fillModels(); })
+      .catch(failure => { configError = failure.message; }).finally(() => { loading = false; render(); });
   }
   return { openSettings, openVideoSettings: () => openLocalSettings(), openMuseImageSettings: () => openLocalSettings(true), attachCreator };
 }

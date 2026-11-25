@@ -229,19 +229,18 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
         json(res,200,await videos.test(input));return;
       }
       if(path==='/api/video-jobs'&&req.method==='GET'){
-        const user=await requireAdmin(req);json(res,200,{jobs:videos.list(user.id)});return;
+        const user=await requireUser(req);json(res,200,{jobs:videos.list(user.id)});return;
       }
       const videoJob=/^\/api\/video-jobs\/(video-[0-9a-f-]{36})$/.exec(path);
       if(videoJob&&req.method==='GET'){
-        const user=await requireAdmin(req);json(res,200,{job:videos.get(videoJob[1],user.id)});return;
+        const user=await requireUser(req);json(res,200,{job:videos.get(videoJob[1],user.id)});return;
       }
       if(videoJob&&req.method==='DELETE'){
-        sameOrigin(req);const user=await requireAdmin(req);
-        await auth.assertActiveAdmin(user.id);
+        sameOrigin(req);const user=await requireUser(req);
         json(res,200,await videos.remove(videoJob[1],user.id));return;
       }
       if(path==='/api/video-jobs'&&req.method==='POST'){
-        sameOrigin(req);const user=await requireAdmin(req);
+        sameOrigin(req);await requireUser(req);
         const maximum=29*1024**2,reserved=Number(req.headers['content-length'])||maximum;
         assert(reserved<=maximum,'视频参考图内容过大。',413);
         assert(activeUploads<2&&uploadBytes+reserved<=256*1024**2,'上传繁忙，请稍后重试。',503);
@@ -249,17 +248,17 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
         let upload;
         try{
           upload=await readMultipart(req,{maxBytes:maximum});
-          await auth.assertActiveAdmin(user.id);
+          const user=await requireUser(req);
           const job=await videos.submit(upload.metadata,upload.files,user);
           json(res,202,{job});return;
         }finally{activeUploads--;uploadBytes-=reserved;await upload?.cleanup();}
       }
       if(path==='/api/generation/config'&&req.method==='GET'){
-        const user=await requireUser(req);json(res,200,await generationService.settings(false,user.role==='admin'));return;
+        await requireUser(req);json(res,200,{...(await generationService.settings()),videoAvailable:videos.settings().available});return;
       }
       const museImageJob=/^\/api\/generations\/muse\/([0-9a-f-]{36})$/.exec(path);
       if(museImageJob&&req.method==='GET'){
-        const user=await requireAdmin(req),result=await generationService.museStatus(museImageJob[1],user);
+        const user=await requireUser(req),result=await generationService.museStatus(museImageJob[1],user);
         json(res,result.job&&result.job.status!=='failed'?202:200,result);return;
       }
       if(path==='/api/generations'&&req.method==='POST'){
@@ -273,7 +272,6 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
         try{
           upload=await readMultipart(req);
           activeUploads--;uploadBytes-=reserved;released=true;
-          if(typeof upload.metadata?.modelId==='string'&&upload.metadata.modelId.trim()==='muse-image'&&user.role==='admin')await auth.assertActiveAdmin(user.id);
           const result=await generationService.generate(upload.metadata,upload.files,user);
           json(res,result.job?202:200,result);return;
         }finally{try{await upload?.cleanup();}finally{if(!released){activeUploads--;uploadBytes-=reserved;}}}

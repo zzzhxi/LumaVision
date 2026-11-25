@@ -52,9 +52,9 @@ async function setup(t, handler, { waitMs = 2000 } = {}) {
     const response = await http(jobs, { method: 'POST', body, actor });
     return { status: response.status, ...(await response.json()) };
   }
-  async function until(id, status) {
+  async function until(id, status, actor = 'admin') {
     for (let i = 0; i < 100; i++) {
-      const { job } = await (await http(jobs + '/' + id)).json();
+      const { job } = await (await http(jobs + '/' + id, { actor })).json();
       if (job.status === status) return job;
       if (['failed', 'submission_unknown'].includes(job.status)) assert.fail(JSON.stringify(job));
       await delay(15);
@@ -78,12 +78,18 @@ test('管理员可配置视频，参考图和特殊比例送往 Muse，成片私
   });
   assert.equal((await env.http(adminConfig, { actor: 'member' })).status, 403);
   assert.equal((await (await env.http(adminConfig)).json()).baseUrl, 'http://127.0.0.1:18610/v1');
-  assert.equal((await env.submit(metadata(), false, 'member')).status, 403);
-  assert.equal((await env.submit(metadata())).status, 503);
+  assert.equal((await env.submit(metadata(), false, null)).status, 401);
+  assert.equal((await env.http(jobs, { actor: null })).status, 401);
+  assert.equal((await env.submit(metadata(), false, 'member')).status, 503);
+  const creatorConfig = () => env.http('/api/generation/config', { actor: 'member' }).then(response => response.json());
+  assert.equal((await creatorConfig()).videoAvailable, false);
   assert.equal((await env.configure({ baseUrl: 'http://example.com/v1' })).status, 400);
   const config = await env.configure();
   assert.equal(config.status, 200);
   assert.equal((await config.text()).includes(key), false);
+  const options = await creatorConfig();
+  assert.equal(options.videoAvailable, true);
+  assert.equal(JSON.stringify(options).includes(key), false);
   assert.equal((await env.http('/api/admin/video-generation-test', { method: 'POST', body: {} })).status, 200);
   const input = metadata();
   const accepted = await env.submit(input, true);
@@ -134,16 +140,18 @@ test('重启后继续查询已接收的视频任务，关闭开关仍可保存�
     return new Response(video);
   });
   await env.configure({ baseUrl: legacyBase, enabled: true, apiKey: key });
-  const { job } = await env.submit(metadata({ ratio: '9:16', duration: 8 }));
+  const { job } = await env.submit(metadata({ ratio: '9:16', duration: 8 }), false, 'member');
   assert.equal(job.ratio, '9:16');
   assert.equal(job.duration, 8);
-  const processing = await env.until(job.id, 'processing');
+  const processing = await env.until(job.id, 'processing', 'member');
   assert.equal(processing.progress, 15);
+  assert.equal((await env.http(jobs + '/' + job.id)).status, 404);
+  assert.deepEqual((await (await env.http(jobs)).json()).jobs, []);
   assert.equal((await env.submit(metadata())).status, 429);
   assert.equal((await env.configure({ enabled: false })).status, 200);
   await env.restart();
   assert.equal((await (await env.http(adminConfig)).json()).baseUrl, legacyBase);
-  const { jobs: [restored] } = await (await env.http(jobs)).json();
+  const { jobs: [restored] } = await (await env.http(jobs, { actor: 'member' })).json();
   assert.equal(restored.id, job.id);
   assert.equal(restored.ratio, '9:16');
   assert.equal(restored.duration, 8);
@@ -152,7 +160,7 @@ test('重启后继续查询已接收的视频任务，关闭开关仍可保存�
   assert.equal(restored.created, job.created);
   assert.equal(restored.progress, 15);
   ready = true;
-  await env.until(job.id, 'succeeded');
+  await env.until(job.id, 'succeeded', 'member');
   assert.equal(env.calls.filter(url => url.endsWith('/videos')).length, 1);
   assert.equal((await env.submit(metadata())).status, 503);
 });
@@ -193,7 +201,7 @@ test('派发中途重启保留待确认状态并拒绝重复派发', async t => 
   assert.match(unknown.error, /先在 Muse 检查/);
   const replay = await env.submit(input, true);
   assert.equal(replay.job.id, job.id);
-  for (const [actor, status] of [[null, 401], ['member', 403], ['other-admin', 404]]) {
+  for (const [actor, status] of [[null, 401], ['member', 404], ['other-admin', 404]]) {
     assert.equal((await env.http(path, { method: 'DELETE', actor })).status, status);
   }
   assert.equal((await env.http(path, { method: 'DELETE', headers: { origin: 'https://other.test' } })).status, 403);
@@ -212,10 +220,10 @@ test('派发中途重启保留待确认状态并拒绝重复派发', async t => 
 test('作者可删除已明确失败的 Muse 视频任务', async t => {
   const env = await setup(t, async () => Response.json({ error: '离线测试拒绝' }, { status: 400 }));
   await env.configure();
-  const { job } = await env.submit(metadata());
-  await env.until(job.id, 'failed');
-  assert.equal((await env.http(jobs + '/' + job.id, { method: 'DELETE' })).status, 200);
-  assert.deepEqual((await (await env.http(jobs)).json()).jobs, []);
+  const { job } = await env.submit(metadata(), false, 'member');
+  await env.until(job.id, 'failed', 'member');
+  assert.equal((await env.http(jobs + '/' + job.id, { method: 'DELETE', actor: 'member' })).status, 200);
+  assert.deepEqual((await (await env.http(jobs, { actor: 'member' })).json()).jobs, []);
 });
 
 test('五种画幅均发送给 Muse，上游中断与无效成片显示失败', async t => {

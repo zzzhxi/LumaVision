@@ -138,11 +138,11 @@ export function createGenerationService(storageRoot, generations, { fetchImpl = 
   let configQueue = Promise.resolve();
   let active = 0;
   const requests = new Map();
-  function publicConfig(admin = false, canUseMuse = false) {
+  function publicConfig(admin = false) {
     const muse = config.muse;
     if (admin) return { available: !!(config.apiKey && config.models.length), models: config.models, defaultModel: config.defaultModel,
       baseUrl: config.baseUrl, hasApiKey: !!config.apiKey, muse: { baseUrl: muse.baseUrl, enabled: muse.enabled, hasApiKey: !!muse.apiKey } };
-    if (canUseMuse && muse.enabled) {
+    if (muse.enabled) {
       const models = config.apiKey ? [...config.models, museModel] : [museModel];
       return { available: true, models, defaultModel: config.apiKey && config.defaultModel || museModel.id };
     }
@@ -286,7 +286,7 @@ export function createGenerationService(storageRoot, generations, { fetchImpl = 
     ready,
     start() { if (activeMuse) void finishMuse(activeMuse, config.muse); },
     close() { lifetime.abort(); },
-    async settings(admin = false, canUseMuse = false) { await ready; return publicConfig(admin, canUseMuse); },
+    async settings(admin = false) { await ready; return publicConfig(admin); },
     async museStatus(requestId, author) {
       await ready;
       const id = generationId(author.id, requestId);
@@ -331,7 +331,6 @@ export function createGenerationService(storageRoot, generations, { fetchImpl = 
       const id = generationId(author.id, requestId);
       const modelId = requiredText(input.modelId, 200, '模型 ID');
       const useMuse = modelId === museModel.id && !config.models.some(model => model.id === modelId);
-      if (useMuse) assert(author.role === 'admin', 'Muse 生图仅向管理员开放。', 403);
       assert(input.modelCategory === undefined || typeof input.modelCategory === 'string', '模型分类不正确。');
       const requestedCategory = (input.modelCategory || '').trim();
       assert(requestedCategory.length <= 30, '模型分类不正确。');
