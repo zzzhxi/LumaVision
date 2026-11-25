@@ -700,6 +700,9 @@ function renderAdminPage(){
     <div><h3 class="block-title">生图服务</h3><p class="profile-hint">由管理员统一配置 API 地址、密钥和可用模型；配置只保存在本机私有文件中。</p></div>
     <button class="button dark" data-action="generation-settings">${icon('sliders')}打开生图配置</button>
   </section><section class="card-block admin-generation-card">
+    <div><h3 class="block-title">Muse 生图</h3><p class="profile-hint">通过本机 muse2api 生成单张图片，支持参考图，仅管理员可试用。</p></div>
+    <button class="button dark" data-action="muse-image-settings">${icon('sliders')}打开 Muse 生图配置</button>
+  </section><section class="card-block admin-generation-card">
     <div><h3 class="block-title">视频服务</h3><p class="profile-hint">通过本机 Muse 视频服务生成，仅管理员可试用。</p></div>
     <button class="button dark" data-action="video-generation-settings">${icon('sliders')}打开视频配置</button>
   </section>`);
@@ -1281,7 +1284,7 @@ async function openPrompt(id){
   const nextHash='prompt/'+encodeURIComponent(id);if(location.hash.slice(1)!==nextHash)location.hash=nextHash;
 }
 let creativeDraftId=null,creativeRefs=[],creativeSession=0,creativeEdited=false;
-const imageModels=['GPT Image','Nano Banana','Midjourney','FLUX','Seedream'];
+const imageModels=['GPT Image','Nano Banana','Midjourney','FLUX','Seedream','Muse Image'];
 const videoModels=['Seedance','Kling','Wan','Hailuo','Muse Video'];
 function creativeModels(type){return [...(type==='video'?videoModels:imageModels)];}
 let creativePreview=null;
@@ -1474,6 +1477,7 @@ document.addEventListener('click',event=>{
     case 'admin-users-prev':if(state.adminUserFilters.page>1){state.adminUserFilters.page--;refreshAdminUsers();}break;
     case 'admin-users-next':if(state.adminUserFilters.page<state.adminUserPages){state.adminUserFilters.page++;refreshAdminUsers();}break;
     case 'generation-settings':generationUI.openSettings();break;
+    case 'muse-image-settings':generationUI.openMuseImageSettings();break;
     case 'video-generation-settings':generationUI.openVideoSettings();break;
     case 'edit-nickname':openNickname();break;
     case 'change-password':openPassword();break;

@@ -123,7 +123,7 @@ function serveFile(req,res,file,size,mtimeMs){
   if(req.method==='HEAD'||!size){res.end();return;}
   const stream=createReadStream(file,{start,end});stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());stream.pipe(res);
 }
-export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,sendAuthCode,ffmpeg,generationFetch,generationTimeoutMs,videoFetch,videoPollMs,videoWaitMs,captchaFactory,registrationEmailDomains}={}){
+export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,sendAuthCode,ffmpeg,generationFetch,generationTimeoutMs,museImagePollMs,videoFetch,videoPollMs,videoWaitMs,captchaFactory,registrationEmailDomains}={}){
   let publicSite;
   if(publicOrigin!==undefined&&URL.canParse(publicOrigin))publicSite=new URL(publicOrigin);
   if(publicOrigin!==undefined&&(!publicSite||publicSite.protocol!=='https:'||
@@ -145,7 +145,7 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
     captchaFactory,registrationEmailDomains,seedFirstAdmin:!publicSite
   });
   const generations=createGenerationStore(storageRoot);
-  const generationService=createGenerationService(storageRoot,generations,{fetchImpl:generationFetch,timeoutMs:generationTimeoutMs});
+  const generationService=createGenerationService(storageRoot,generations,{fetchImpl:generationFetch,timeoutMs:generationTimeoutMs,musePollMs:museImagePollMs});
   const videos=createVideoGeneration(storageRoot,generations,{fetchImpl:videoFetch,pollMs:videoPollMs,waitMs:videoWaitMs});
   const derivatives=createDerivatives(storageRoot,{ffmpeg});
   let activeUploads=0,uploadBytes=0;
@@ -243,7 +243,12 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
         }finally{activeUploads--;uploadBytes-=reserved;await upload?.cleanup();}
       }
       if(path==='/api/generation/config'&&req.method==='GET'){
-        await requireUser(req);json(res,200,await generationService.settings());return;
+        const user=await requireUser(req);json(res,200,await generationService.settings(false,user.role==='admin'));return;
+      }
+      const museImageJob=/^\/api\/generations\/muse\/([0-9a-f-]{36})$/.exec(path);
+      if(museImageJob&&req.method==='GET'){
+        const user=await requireAdmin(req),result=await generationService.museStatus(museImageJob[1],user);
+        json(res,result.job&&result.job.status!=='failed'?202:200,result);return;
       }
       if(path==='/api/generations'&&req.method==='POST'){
         sameOrigin(req);const user=await requireUser(req);
@@ -256,8 +261,9 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
         try{
           upload=await readMultipart(req);
           activeUploads--;uploadBytes-=reserved;released=true;
-          const generation=await generationService.generate(upload.metadata,upload.files,user);
-          json(res,200,{generation});return;
+          if(typeof upload.metadata?.modelId==='string'&&upload.metadata.modelId.trim()==='muse-image'&&user.role==='admin')await auth.assertActiveAdmin(user.id);
+          const result=await generationService.generate(upload.metadata,upload.files,user);
+          json(res,result.job?202:200,result);return;
         }finally{try{await upload?.cleanup();}finally{if(!released){activeUploads--;uploadBytes-=reserved;}}}
       }
       if(path==='/api/admin/metrics'&&req.method==='GET'){await requireAdmin(req);json(res,200,metrics());return;}
@@ -520,8 +526,8 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
     }
   });
   server.requestTimeout=300000;
-  server.on('listening',()=>videos.start());
-  server.on('close',()=>{videos.close();store.close();generations.close();derivatives.close();});
+  server.on('listening',()=>{videos.start();generationService.start();});
+  server.on('close',()=>{generationService.close();videos.close();store.close();generations.close();derivatives.close();});
   return {server,store,auth,generations,metrics};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){

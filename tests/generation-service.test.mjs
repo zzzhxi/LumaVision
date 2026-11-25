@@ -12,13 +12,25 @@ await mkdir(parent, { recursive: true });
 const picture = await readFile(new URL('../assets/aurora.jpg', import.meta.url));
 const modelId = 'test-image-model-with-an-id-longer-than-forty-characters-2026';
 const key = 'offline-key-sentinel';
+const museKey = 'offline-muse-key-sentinel';
 const payload = overrides => ({ requestId: randomUUID(), title: '测试生成', prompt: 'A quiet sea.', negative: '文字', modelId, category: '自然风光', width: 1024, height: 1536, count: 1, ...overrides });
 async function setup(t, { timeoutMs = 1000 } = {}) {
   const dir = await mkdtemp(join(parent, 'generation-test-'));
   const calls = [];
-  let mode = 'base64', delay = null, policyBody = '', policyType = 'application/json';
+  let mode = 'base64', delay = null, policyBody = '', policyType = 'application/json', museComplete = true;
+  let failMusePoll = false, failMuseDownload = false;
   const fetchImpl = async (url, options) => {
     calls.push({ url: String(url), options });
+    if (String(url) === 'http://127.0.0.1:18610/v1/models') return Response.json({ data: [{ id: 'muse-image' }] });
+    if (String(url).endsWith('/images/tasks')) return Response.json({ id: 'muse-fixture', status: 'queued' }, { status: 202 });
+    if (String(url).endsWith('/images/tasks/muse-fixture')) {
+      if (failMusePoll) { failMusePoll = false; throw new Error('engine temporarily offline'); }
+      return Response.json(museComplete ? { status: 'completed', data: [{ url: '/v1/media/muse-fixture.jpg' }] } : { status: 'processing' });
+    }
+    if (String(url).endsWith('/v1/media/muse-fixture.jpg')) {
+      if (failMuseDownload) { failMuseDownload = false; return Response.json({ error: 'temporary download failure' }, { status: 503 }); }
+      return new Response(picture);
+    }
     if (String(url).endsWith('/models')) {
       if (mode === 'auth') return Response.json({ error: { message: 'Bearer ' + key } }, { status: 401 });
       return Response.json({ data: [{ id: modelId }, { id: 'text-model' }] });
@@ -43,7 +55,7 @@ async function setup(t, { timeoutMs = 1000 } = {}) {
     if (mode === 'url') return Response.json({ data: [{ url: 'http://image-service.test/output.jpg' }] });
     return Response.json({ data: [{ b64_json: picture.toString('base64') }] }, { headers: { 'x-request-id': 'provider-fixture-id' } });
   };
-  const options = { storageRoot: dir, generationFetch: fetchImpl, generationTimeoutMs: timeoutMs, sendAuthCode: async () => ({ delivery: 'email' }) };
+  const options = { storageRoot: dir, generationFetch: fetchImpl, generationTimeoutMs: timeoutMs, museImagePollMs: 10, sendAuthCode: async () => ({ delivery: 'email' }) };
   let app = await createApp(options);
   const listen = async () => { app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening'); };
   await listen();
@@ -65,8 +77,83 @@ async function setup(t, { timeoutMs = 1000 } = {}) {
     return { status: response.status, body: await response.json() };
   }
   const configure = (overrides = {}) => api('/api/admin/generation-config', { method: 'PUT', body: { baseUrl: 'http://image-service.test/v1/', apiKey: 'Bearer ' + key, models: [{ id: modelId, name: '测试图片模型' }], defaultModel: modelId, ...overrides } });
-  return { dir, calls, users, cookies, api, generate, configure, url, get app() { return app; }, mode(value) { mode = value; }, policy(body, type) { policyBody = body; policyType = type; }, delay(value) { delay = value; }, async restart() { await new Promise(done => app.server.close(done)); app = await createApp(options); await listen(); } };
+  return { dir, calls, users, cookies, api, generate, configure, url, get app() { return app; }, mode(value) { mode = value; }, policy(body, type) { policyBody = body; policyType = type; }, delay(value) { delay = value; }, museComplete(value) { museComplete = value; }, failNextMuseReads() { failMusePoll = failMuseDownload = true; }, async restart(onStopped) { await new Promise(done => app.server.close(done)); onStopped?.(); app = await createApp(options); await listen(); } };
 }
+
+test('Muse Image 独立配置且默认关闭，仅管理员可提交单张图片', async t => {
+  const env = await setup(t);
+  await env.configure();
+  const config = '/api/admin/generation-config';
+  const muse = { enabled: true, apiKey: museKey };
+  assert.equal((await env.api(config)).body.muse.enabled, false);
+  assert.equal((await env.api(config, { method: 'PUT', body: { muse: { ...muse, baseUrl: 'https://example.test/v1' } } })).status, 400);
+  assert.equal((await env.api(config, { method: 'PUT', body: { muse }, actor: 'member' })).status, 403);
+  assert.equal((await env.api('/api/admin/generation-models', { method: 'POST', body: { muse } })).status, 200);
+  assert.equal((await env.api(config)).body.muse.hasApiKey, false);
+  const saved = await env.api(config, { method: 'PUT', body: { muse } });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.baseUrl, 'http://image-service.test/v1');
+  assert.equal(JSON.stringify(saved.body).includes(muse.apiKey), false);
+  const catalogue = '/api/generation/config';
+  assert.deepEqual((await env.api(catalogue, { actor: 'member' })).body.models.map(item => item.id), [modelId]);
+  assert.equal((await env.api(catalogue)).body.models.find(item => item.id === 'muse-image').category, 'Muse Image');
+  assert.equal((await env.generate(payload({ modelId: 'muse-image' }))).status, 403);
+  assert.equal((await env.generate(payload({ modelId: 'muse-image', count: 2 }), [], 'admin')).status, 400);
+  assert.equal((await env.generate()).status, 200);
+});
+
+test('Muse Image 异步接收参考图，重启后继续单次任务并保存私有成图', async t => {
+  const env = await setup(t);
+  env.museComplete(false);
+  await env.api('/api/admin/generation-config', { method: 'PUT', body: { muse: { enabled: true, apiKey: museKey } } });
+  const input = payload({ modelId: 'muse-image', modelCategory: 'GPT Image', width: 1536, height: 864 });
+  const reference = new File([picture], 'reference.jpg', { type: 'image/jpeg' });
+  const result = await env.generate(input, [reference], 'admin');
+  assert.equal(result.status, 202);
+  const path = `/api/generations/muse/${input.requestId}`;
+  assert.equal((await env.api(path, { actor: 'member' })).status, 403);
+  assert.equal((await env.generate(input, [reference], 'admin')).status, 202);
+  assert.equal((await env.generate({ ...input, prompt: 'changed' }, [reference], 'admin')).status, 409);
+  await env.api('/api/admin/generation-config', { method: 'PUT', body: { muse: { enabled: false } } });
+  const now = Date.now;
+  await env.restart(() => {
+    t.mock.method(Date, 'now', () => now() + 16 * 60_000);
+    env.failNextMuseReads();
+  });
+  const deadline = now() + 3000;
+  let pending;
+  do {
+    pending = await env.api(path);
+    if (pending.status !== 202 || pending.body.job.status === 'processing') break;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  } while (now() < deadline);
+  assert.equal(pending.body.job?.status, 'processing', pending.body.job?.error);
+  env.museComplete(true);
+  let completed;
+  do {
+    completed = await env.api(path);
+    if (completed.status !== 202) break;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  } while (now() < deadline);
+  assert.equal(completed.status, 200);
+  const record = completed.body.generation;
+  assert.ok(record, completed.body.job?.error);
+  assert.equal(record.provider, 'Muse');
+  assert.equal(record.model, 'Muse Image');
+  assert.equal(record.providerResultId, 'muse-fixture');
+  assert.equal(record.authorId, env.users.admin.id);
+  const submissions = env.calls.filter(call => call.url.endsWith('/images/tasks'));
+  assert.equal(submissions.length, 1);
+  assert.equal(env.calls.filter(call => call.url.endsWith('/v1/media/muse-fixture.jpg')).length, 2);
+  assert.equal(submissions[0].options.headers.Authorization, 'Bearer ' + museKey);
+  assert.ok(submissions[0].options.headers['Idempotency-Key']);
+  const args = JSON.parse(submissions[0].options.body);
+  assert.equal(args.aspect_ratio, '16:9');
+  assert.equal(args.images[0], `data:image/jpeg;base64,${picture.toString('base64')}`);
+  assert.equal((await fetch(env.url() + record.media[0].url, { headers: { cookie: env.cookies.member } })).status, 404);
+  assert.equal((await fetch(env.url() + record.media[0].url, { headers: { cookie: env.cookies.admin, range: 'bytes=0-19' } })).status, 206);
+  assert.equal((await env.generate(payload({ modelId: 'muse-image' }), [], 'admin')).status, 503);
+});
 
 test('配置只允许管理员维护，连接测试不保存密钥，公开配置不暴露服务地址和密钥，重启与清除有效', async t => {
   const env = await setup(t);

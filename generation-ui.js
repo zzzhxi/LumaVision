@@ -1,3 +1,5 @@
+const imageConfigPath = '/api/admin/generation-config';
+const imageModelsPath = '/api/admin/generation-models';
 const videoConfigPath = '/api/admin/video-generation-config';
 const videoRatios = ['16:9', '9:16', '1:1', '4:3', '3:4'];
 const videoDurations = [5, 6, 8, 10];
@@ -12,7 +14,7 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     if (session().user?.role !== 'admin') return;
     const epoch = session().epoch;
     let settings;
-    try { settings = await request('/api/admin/generation-config'); }
+    try { settings = await request(imageConfigPath); }
     catch (error) { toast(error.message); return; }
     if (session().epoch !== epoch) return;
     dialog.innerHTML = `<form class="mini-form generation-form"><button type="button" class="icon-button close" data-close="generation-settings" aria-label="关闭生图服务设置">×</button><p class="eyebrow">IMAGE SERVICE</p><h2 id="generation-settings-title">生图服务</h2><p class="generation-help">由管理员统一配置，登录用户共用。模型列表可能包含不能生图的模型，请只启用已确认的图片模型。别称显示在创作台的模型选择里，模型分类决定生成结果归入灵感库的哪个模型分组。</p><label class="field">API Base URL<input name="baseUrl" type="url" required value="${escape(settings.baseUrl)}" placeholder="http://127.0.0.1:38650/v1"></label><label class="field">API Key<input name="apiKey" type="password" autocomplete="new-password" placeholder="${settings.hasApiKey ? '已配置；留空保留原密钥' : '输入 Key 或 Bearer Key'}"></label><label class="generation-check"><input name="clearKey" type="checkbox">清除已保存的密钥</label><button type="button" class="button soft" id="generation-test">测试连接并读取模型</button><div class="field"><span>已启用的模型</span><div id="generation-models" class="generation-models"></div></div><div class="generation-manual"><label class="field">手动添加模型 ID<input id="generation-model-id" maxlength="200" placeholder="精确的接口模型 ID"></label><button type="button" class="button soft" id="generation-add-model">添加</button></div><label class="field">默认模型<select name="defaultModel"></select></label><p id="generation-settings-status" role="status" aria-live="polite"></p><div class="mini-form-actions"><button type="button" class="button soft" data-close="generation-settings">取消</button><button type="submit" class="button dark">保存配置</button></div></form>`;
@@ -68,7 +70,7 @@ export function createGenerationUI({ request, session, escape, toast, completed,
       finally { if (isCurrent()) form.querySelectorAll('button,input,select').forEach(control => { control.disabled = false; }); }
     }
     form.querySelector('#generation-test').addEventListener('click', () => busy(async () => {
-      const result = await request('/api/admin/generation-models', { method: 'POST', body: candidate() });
+      const result = await request(imageModelsPath, { method: 'POST', body: candidate() });
       if (!isCurrent()) return;
       for (const model of result.models) if (!models.has(model.id)) models.set(model.id, model);
       renderModels(); status.textContent = `连接成功，读取到 ${result.models.length} 个模型。请选择可生图模型后保存。`;
@@ -76,7 +78,7 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     form.addEventListener('submit', event => {
       event.preventDefault();
       busy(async () => {
-        const result = await request('/api/admin/generation-config', { method: 'PUT', body: { ...candidate(), models: [...models.values()].filter(model => enabled.has(model.id)), defaultModel: form.elements.defaultModel.value } });
+        const result = await request(imageConfigPath, { method: 'PUT', body: { ...candidate(), models: [...models.values()].filter(model => enabled.has(model.id)), defaultModel: form.elements.defaultModel.value } });
         if (!isCurrent()) return;
         form.elements.apiKey.value = ''; form.elements.clearKey.checked = false;
         form.elements.apiKey.placeholder = result.hasApiKey ? '已配置；留空保留原密钥' : '输入 Key 或 Bearer Key';
@@ -85,40 +87,47 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     });
     dialog.showModal();
   }
-  async function openVideoSettings() {
+  async function openLocalSettings(museImage = false) {
     if (session().user?.role !== 'admin') return;
     const epoch = session().epoch;
+    const configPath = museImage ? imageConfigPath : videoConfigPath;
+    const testPath = museImage ? imageModelsPath : '/api/admin/video-generation-test';
+    const title = museImage ? 'Muse 生图' : '视频服务';
+    const keyHint = '所填回环服务的 API Key';
     let settings;
-    try { settings = await request(videoConfigPath); }
+    try {
+      const result = await request(configPath);
+      settings = museImage ? result.muse : result;
+    }
     catch (error) { toast(error.message); return; }
     if (session().epoch !== epoch || dialog.open) return;
     dialog.innerHTML = `<form class="mini-form generation-form">
-      <button type="button" class="icon-button close" data-close="generation-settings" aria-label="关闭视频服务设置">×</button>
-      <h2 id="generation-settings-title">视频服务</h2>
+      <button type="button" class="icon-button close" data-close="generation-settings" aria-label="关闭${title}设置">×</button>
+      <h2 id="generation-settings-title">${title}</h2>
       <label class="field">API Base URL<input name="baseUrl" type="url" required value="${escape(settings.baseUrl)}"></label>
-      <label class="field">API Key<input name="apiKey" type="password" autocomplete="new-password" placeholder="${settings.hasApiKey ? '已配置 · 留空保留原密钥' : 'Muse 管理员签发的平台 Key'}"></label>
+      <label class="field">API Key<input name="apiKey" type="password" autocomplete="new-password" placeholder="${settings.hasApiKey ? '已配置 · 留空保留原密钥' : keyHint}"></label>
       <label class="generation-check"><input name="clearKey" type="checkbox">清除已保存的密钥</label>
-      <label class="generation-check"><input name="enabled" type="checkbox" ${settings.enabled ? 'checked' : ''}>启用视频生成（仅管理员）</label>
-      <button type="button" class="button soft" data-test-video>测试连接</button>
+      <label class="generation-check"><input name="enabled" type="checkbox" ${settings.enabled ? 'checked' : ''}>启用${museImage ? 'Muse 生图' : '视频生成'}（仅管理员）</label>
+      <button type="button" class="button soft" data-test-service>测试连接</button>
       <p role="status"></p>
       <div class="mini-form-actions"><button type="button" class="button soft" data-close="generation-settings">关闭</button><button type="submit" class="button dark">保存配置</button></div>
     </form>`;
     const form = dialog.querySelector('form'), status = form.querySelector('[role="status"]');
-    const fields = form.elements, test = form.querySelector('[data-test-video]'), save = form.querySelector('[type="submit"]');
+    const fields = form.elements, test = form.querySelector('[data-test-service]'), save = form.querySelector('[type="submit"]');
     async function submit(verify) {
       if (!form.reportValidity()) return;
       const body = { baseUrl: fields.baseUrl.value, apiKey: fields.apiKey.value, clearKey: fields.clearKey.checked, enabled: fields.enabled.checked };
       test.disabled = save.disabled = true;
       status.textContent = verify ? '正在测试连接…' : '正在保存配置…';
       try {
-        const result = await request(verify ? '/api/admin/video-generation-test' : videoConfigPath, { method: verify ? 'POST' : 'PUT', body });
+        const result = await request(verify ? testPath : configPath, { method: verify ? 'POST' : 'PUT', body: museImage ? { muse: body } : body });
         if (session().epoch !== epoch || !form.isConnected) return;
         if (!verify) {
           fields.apiKey.value = '';
           fields.clearKey.checked = false;
-          fields.apiKey.placeholder = result.hasApiKey ? '已配置 · 留空保留原密钥' : 'Muse 管理员签发的平台 Key';
+          fields.apiKey.placeholder = (museImage ? result.muse : result).hasApiKey ? '已配置 · 留空保留原密钥' : keyHint;
         }
-        status.textContent = verify ? '连接成功，已找到 Muse Video。' : '视频服务配置已保存。';
+        status.textContent = verify ? `连接成功，已找到 ${museImage ? 'Muse Image' : 'Muse Video'}。` : `${title}配置已保存。`;
       } catch (error) {
         if (session().epoch === epoch && form.isConnected) status.textContent = error.message;
       } finally { test.disabled = save.disabled = false; }
@@ -131,7 +140,8 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     const form = document.querySelector('#creative-form');
     const modelSelect = form.querySelector('#creative-model'), ratio = form.querySelector('#creative-ratio');
     const button = form.querySelector('#generate-button'), status = form.querySelector('.generation-status');
-    const type = form.querySelector('#creative-type'), countField = form.querySelector('#creative-count').closest('.field');
+    const type = form.querySelector('#creative-type'), count = form.querySelector('#creative-count');
+    const countField = count.closest('.field');
     const prompt = form.querySelector('#creative-prompt'), negative = form.querySelector('.creative-advanced');
     const description = form.closest('.creator-layout').querySelector('.creator-heading p:last-child');
     const draftRatios = ratio.innerHTML;
@@ -175,6 +185,7 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     let config = null, videoConfig = null, error = '', videoError = '', loading = !!userId, loadingVideo = admin;
     let previousVideoControls = false;
     const current = () => form.isConnected && session().epoch === epoch;
+    const selectedModel = () => config?.models.find(model => model.id === modelSelect.value);
     let categoryInitialized = false;
     const categoryOptions = () => {
       const options = new Set(['GPT Image']);
@@ -188,17 +199,22 @@ export function createGenerationUI({ request, session, escape, toast, completed,
     }
     // 生成结果归入所选模型分类，默认跟随管理员为该模型配置的分类。
     function syncCategory() {
-      const model = config?.models?.find(item => item.id === modelSelect.value);
-      fillCategories(categoryInitialized ? model?.category : draft.modelCategory || model?.category);
+      const model = selectedModel();
+      fillCategories(categoryInitialized || model?.maxCount === 1 ? model?.category : draft.modelCategory || model?.category);
       categoryInitialized = true;
     }
     function render() {
       if (!current()) return;
       const image = type.value === 'image';
       const videoEnabled = !image && !!videoConfig?.available;
+      const museImage = image && selectedModel()?.maxCount === 1;
       const busy = running.has(userId);
       dimensions.hidden = !image; ratio.closest('.field').hidden = image;
       countField.hidden = videoEnabled;
+      count.disabled = museImage;
+      if (museImage) count.value = '1';
+      categorySelect.disabled = museImage;
+      dimensions.querySelector('.generation-help').textContent = museImage ? 'Muse 按所选尺寸的宽高比构图，实际像素以成图为准。' : '可用尺寸和数量以所选模型为准。';
       duration.closest('.field').hidden = !videoEnabled;
       negative.hidden = videoEnabled;
       prompt.maxLength = videoEnabled ? 2000 : 8000;
@@ -239,10 +255,10 @@ export function createGenerationUI({ request, session, escape, toast, completed,
       syncCategory();
     }
     type.addEventListener('change', () => { videoError = ''; fillModels(); syncSize(); render(); });
-    modelSelect.addEventListener('change', () => { if (type.value === 'image') syncCategory(); });
+    modelSelect.addEventListener('change', () => { if (type.value === 'image') { syncCategory(); render(); } });
     refreshCreator = render;
     render();
-    let lastVideoRequest;
+    let lastVideoRequest, lastMuseRequest;
     button.addEventListener('click', async () => {
       if (!userId) { login(); return; }
       if (running.has(userId) || !form.reportValidity()) return;
@@ -250,6 +266,7 @@ export function createGenerationUI({ request, session, escape, toast, completed,
       if (!data.prompt) { status.textContent = '先写下一段提示词。'; return; }
       const referenceSnapshot = references().slice();
       const video = data.type === 'video';
+      const museImage = !video && selectedModel()?.maxCount === 1;
       if (video && (!videoConfig?.available || data.prompt.length > 2000)) {
         videoError = '视频生成需要已启用的服务，提示词最多 2,000 字符。'; render(); return;
       }
@@ -274,16 +291,29 @@ export function createGenerationUI({ request, session, escape, toast, completed,
           const fingerprint = JSON.stringify([metadata, referenceSnapshot.map(ref => ref.url)]);
           if (lastVideoRequest?.fingerprint === fingerprint) requestId = lastVideoRequest.requestId;
           else lastVideoRequest = { fingerprint, requestId };
+        } else if (museImage) {
+          const fingerprint = JSON.stringify([metadata, referenceSnapshot.map(ref => ref.url)]);
+          if (lastMuseRequest?.fingerprint === fingerprint) requestId = lastMuseRequest.requestId;
+          else lastMuseRequest = { fingerprint, requestId };
         }
         payload.set('metadata', JSON.stringify({ ...metadata, requestId }));
         for (const file of files) payload.append('files', file);
         const response = await fetch(video ? '/api/video-jobs' : '/api/generations', { method: 'POST', body: payload });
-        const result = await response.json();
+        let result = await response.json();
         if (!response.ok) throw new Error(result.error || '生成失败，请稍后再试。');
+        while (!video && result.job && session().epoch === epoch) {
+          if (result.job.status === 'failed') {
+            lastMuseRequest = null;
+            throw new Error(result.job.error || 'Muse 生图失败。');
+          }
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          if (session().epoch !== epoch) return;
+          result = await request(`/api/generations/muse/${requestId}`, { signal: AbortSignal.timeout(15000) });
+        }
         if (session().epoch !== epoch) return;
         const show = form.isConnected && document.querySelector('#creator').open;
         if (video) { lastVideoRequest = null; videoAccepted(result.job, show); }
-        else completed(result.generation, show);
+        else { lastMuseRequest = null; completed(result.generation, show); }
       } catch (failure) {
         if (session().epoch === epoch) {
           const message = failure.message || '生成请求中断，请先检查生成记录，避免重复生成。';
@@ -299,5 +329,5 @@ export function createGenerationUI({ request, session, escape, toast, completed,
         .catch(failure => { videoError = failure.message; }).finally(() => { loadingVideo = false; render(); })
     ]);
   }
-  return { openSettings, openVideoSettings, attachCreator };
+  return { openSettings, openVideoSettings: () => openLocalSettings(), openMuseImageSettings: () => openLocalSettings(true), attachCreator };
 }
