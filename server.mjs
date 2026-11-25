@@ -8,6 +8,7 @@ import { createStore, HttpError, limits } from './storage.mjs';
 import { createGenerationStore, generatedMediaExtension } from './generations.mjs';
 import { createGenerationService } from './generation-service.mjs';
 import { createVideoGeneration } from './video-generation.mjs';
+import { museAdminPath, serveMuseAdmin } from './muse-admin.mjs';
 import { queryWorks, workCard } from './work-query.mjs';
 import { readMultipart } from './multipart.mjs';
 import { createDerivatives } from './derivatives.mjs';
@@ -123,7 +124,7 @@ function serveFile(req,res,file,size,mtimeMs){
   if(req.method==='HEAD'||!size){res.end();return;}
   const stream=createReadStream(file,{start,end});stream.on('error',()=>res.destroy());res.on('close',()=>stream.destroy());stream.pipe(res);
 }
-export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,sendAuthCode,ffmpeg,generationFetch,generationTimeoutMs,museImagePollMs,videoFetch,videoPollMs,videoWaitMs,captchaFactory,registrationEmailDomains}={}){
+export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,sendAuthCode,ffmpeg,generationFetch,generationTimeoutMs,museImagePollMs,videoFetch,videoPollMs,videoWaitMs,museAdminFetch,captchaFactory,registrationEmailDomains}={}){
   let publicSite;
   if(publicOrigin!==undefined&&URL.canParse(publicOrigin))publicSite=new URL(publicOrigin);
   if(publicOrigin!==undefined&&(!publicSite||publicSite.protocol!=='https:'||
@@ -194,6 +195,12 @@ export async function createApp({storageRoot=resolve(root,'data'),publicOrigin,s
         throw new HttpError(403,publicSite?'请使用站点配置的域名访问。':'只允许从本机访问。');
       }
       let path;try{path=decodeURIComponent(new URL(req.url,'http://localhost').pathname);}catch{throw new HttpError(400,'请求路径不正确。');}
+      if(path===museAdminPath||path.startsWith(museAdminPath+'/')){
+        const actor=await requireAdmin(req);
+        if(req.method!=='GET'&&req.method!=='HEAD')sameOrigin(req);
+        await serveMuseAdmin(req,res,{path,connection:generationService.museAdminConnection()||videos.museAdminConnection(),
+          readBody:body,verifyWrite:()=>auth.assertActiveAdmin(actor.id),sendJson:json,fetchImpl:museAdminFetch});return;
+      }
       // ---- 账号与个人资料 ----
       if(path==='/api/admin/generation-config'&&req.method==='GET'){
         await requireAdmin(req);json(res,200,await generationService.settings(true));return;

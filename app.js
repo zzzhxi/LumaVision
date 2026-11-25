@@ -705,6 +705,9 @@ function renderAdminPage(){
   </section><section class="card-block admin-generation-card">
     <div><h3 class="block-title">视频服务</h3><p class="profile-hint">通过本机 Muse 视频服务生成，仅管理员可试用。</p></div>
     <button class="button dark" data-action="video-generation-settings">${icon('sliders')}打开视频配置</button>
+  </section><section class="card-block admin-generation-card">
+    <div><h3 class="block-title">muse2api 管理</h3><p class="profile-hint">在原版管理页导入 Cookie、管理账号池、查看任务和媒体。</p></div>
+    <a class="button dark" href="/api/admin/muse/">${icon('arrow-up-right')}打开管理页</a>
   </section>`);
   decorate(host);
 }

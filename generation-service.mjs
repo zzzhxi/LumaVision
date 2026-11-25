@@ -282,6 +282,7 @@ export function createGenerationService(storageRoot, generations, { fetchImpl = 
     return publicMuseJob(job);
   }
   return {
+    museAdminConnection() { return config.muse.apiKey ? { baseUrl: config.muse.baseUrl, apiKey: config.muse.apiKey } : null; },
     ready,
     start() { if (activeMuse) void finishMuse(activeMuse, config.muse); },
     close() { lifetime.abort(); },

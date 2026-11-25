@@ -18,7 +18,7 @@ npm start
 npm run setup:muse
 ```
 
-安装程序读取 `deploy/muse2api-release` 中锁定的发行提交和 SHA-256，目前为 muse2api 1.6.12。引擎和 Python 虚拟环境安装到 `upstream/muse2api/releases/`，引擎 Key、账号池、任务和媒体保存在私有的 `upstream/muse2api/state/`。已有的 `.env` 会保留。若 Python 的命令名为 `python3`，可在安装前将 `MUSE2API_PYTHON` 设为 `python3` 或解释器的绝对路径。
+安装程序读取 `deploy/muse2api-release` 中锁定的发行提交和 SHA-256，目前为 muse2api 1.6.12。引擎和 Python 虚拟环境安装到 `upstream/muse2api/releases/`。引擎 Key 取自 `upstream/muse2api/state/.env` 的 `MUSE2API_KEY`，账号池、任务和媒体也保存在该私有状态目录。安装会保留已有的 `.env`。若 Python 的命令名为 `python3`，可在安装前将 `MUSE2API_PYTHON` 设为 `python3` 或解释器的绝对路径。
 
 之后运行 `npm start` 或 `npm run dev` 即可启动网站和独立引擎。引擎监听 `127.0.0.1:18610`，已在运行时直接复用。网站重启时引擎会继续处理任务。在 `http://127.0.0.1:18610/admin` 使用私有 `state/.env` 中的引擎 Key 管理账号池，然后在网站后台配置 Muse 服务。
 
@@ -118,6 +118,10 @@ node server.mjs
 ### 本地管理后台
 
 管理员可从账号菜单或主导航进入「管理后台」，切换用户管理、作品审核、创作者申请和生成服务。生成服务页签包含通用生图、Muse 生图和视频三项独立配置。原 `#review` 链接会跳到 `#admin/works`；其他页签也可直接打开和刷新。
+
+在「生成服务」中的 Muse 生图或视频配置里，保存 muse2api 的回环地址（默认 `http://127.0.0.1:18610/v1`）和该引擎的 `MUSE2API_KEY`。连接同一个引擎时，生图和视频填写同一个 Key。设置显示「已配置」后，留空保存会保留已有 Key。部署到服务器时，使用服务器上该引擎的私有配置。见 [部署说明](deploy/README.md#可选部署-muse-图片和视频)。
+
+点击「生成服务 → muse2api 管理 → 打开管理页」，可在 muse2api 原版界面粘贴导入或更新 Cookie、管理和测试账号、调整排队设置、查看任务与媒体，以及运行接口测试。页面和媒体都需要 LumaVision 管理员会话，引擎 Key 仅由服务端使用。Key 轮换、程序升级和依赖引擎 Key 的浏览器扩展继续通过服务器运维入口使用。
 
 用户管理支持按邮箱、昵称或用户 ID 搜索，按角色、账号状态、创作者状态和账号类型筛选，并分页查看。账号详情可调整角色和创作者身份。停用会阻止登录并撤销现有会话和邮箱验证码；重新启用后需要重新登录。
 

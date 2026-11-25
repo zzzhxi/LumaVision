@@ -241,6 +241,7 @@ export function createVideoGeneration(storageRoot, generations, { fetchImpl = fe
   }
 
   return {
+    museAdminConnection() { return config.apiKey ? { baseUrl: config.baseUrl, apiKey: config.apiKey } : null; },
     ready, settings,
     start() { timer = setInterval(() => void tick(), pollMs); timer.unref(); void tick(); },
     close() { clearInterval(timer); lifetime.abort(); },
