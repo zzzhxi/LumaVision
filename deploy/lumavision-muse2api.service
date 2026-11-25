@@ -1,0 +1,35 @@
+[Unit]
+Description=LumaVision optional muse2api engine
+Wants=network-online.target
+After=network-online.target
+Before=lumavision.service
+
+[Service]
+Type=simple
+User=lumavision-muse2api
+Group=lumavision-muse2api
+WorkingDirectory=/opt/lumavision/upstream/muse2api/current
+StateDirectory=lumavision-muse2api
+StateDirectoryMode=0700
+Environment=HOME=/var/lib/lumavision-muse2api
+Environment=MUSE2API_HOME=/var/lib/lumavision-muse2api
+Environment=MUSE2API_PROFILE_ROOT=/var/lib/lumavision-muse2api/profiles
+Environment=MUSE2API_HOST=127.0.0.1
+Environment=MUSE2API_PORT=18610
+Environment=MUSE2API_CDP_PORT=19210
+Environment=MUSE2API_CHROMIUM=/usr/bin/chromium
+Environment=MUSE2API_CONCURRENCY=1
+Environment=MUSE2API_MANAGED_DEPLOYMENT=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStartPre=/opt/lumavision/upstream/muse2api/current/.venv/bin/python -c "from config import CFG; raise SystemExit(0 if CFG.api_key.strip() else 'Set MUSE2API_KEY in the private state .env')"
+ExecStart=/opt/lumavision/upstream/muse2api/current/.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 18610 --workers 1
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=lumavision.service

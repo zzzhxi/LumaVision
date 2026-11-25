@@ -70,11 +70,12 @@ test('管理员可配置视频，参考图和特殊比例送往 Muse，成片私
       submission = JSON.parse(options.body);
       return Response.json({ id: 'task_fixture', status: 'queued', progress: 10 });
     }
-    if (url.endsWith('/videos/task_fixture')) return Response.json({ status: 'completed', url: 'http://127.0.0.1:18610/v1/media/result.webm' });
-    assert.equal(url, 'http://127.0.0.1:8787/v1/media/result.webm');
+    if (url.endsWith('/videos/task_fixture')) return Response.json({ status: 'completed', url: '/v1/media/result.webm' });
+    assert.equal(url, 'http://127.0.0.1:18610/v1/media/result.webm');
     return new Response(video);
   });
   assert.equal((await env.http(adminConfig, { actor: 'member' })).status, 403);
+  assert.equal((await (await env.http(adminConfig)).json()).baseUrl, 'http://127.0.0.1:18610/v1');
   assert.equal((await env.submit(metadata(), false, 'member')).status, 403);
   assert.equal((await env.submit(metadata())).status, 503);
   assert.equal((await env.configure({ baseUrl: 'http://example.com/v1' })).status, 400);
@@ -121,13 +122,15 @@ test('管理员可配置视频，参考图和特殊比例送往 Muse，成片私
 });
 
 test('重启后继续查询已接收的视频任务，关闭开关仍可保存成片', async t => {
+  const legacyBase = 'http://127.0.0.1:8787/v1';
   let ready = false;
   const env = await setup(t, async url => {
+    assert.ok(url.startsWith(legacyBase + '/'));
     if (url.endsWith('/videos')) return Response.json({ id: 'task_resume' });
-    if (url.endsWith('/videos/task_resume')) return Response.json(ready ? { status: 'completed', result: { url: '/v1/media/result.webm' } } : { status: 'processing', progress: 15 });
+    if (url.endsWith('/videos/task_resume')) return Response.json(ready ? { status: 'completed', result: { url: 'http://127.0.0.1:18610/v1/media/result.webm' } } : { status: 'processing', progress: 15 });
     return new Response(video);
   });
-  await env.configure();
+  await env.configure({ baseUrl: legacyBase, enabled: true, apiKey: key });
   const { job } = await env.submit(metadata({ ratio: '9:16', duration: 8 }));
   assert.equal(job.ratio, '9:16');
   assert.equal(job.duration, 8);
@@ -136,6 +139,7 @@ test('重启后继续查询已接收的视频任务，关闭开关仍可保存�
   assert.equal((await env.submit(metadata())).status, 429);
   assert.equal((await env.configure({ enabled: false })).status, 200);
   await env.restart();
+  assert.equal((await (await env.http(adminConfig)).json()).baseUrl, legacyBase);
   const { jobs: [restored] } = await (await env.http(jobs)).json();
   assert.equal(restored.id, job.id);
   assert.equal(restored.ratio, '9:16');

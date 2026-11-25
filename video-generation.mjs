@@ -5,7 +5,7 @@ import { HttpError, identify, limits } from './storage.mjs';
 import { readBounded, redact, upstreamDetail } from './generation-service.mjs';
 
 const model = 'muse-video', modelName = 'Muse Video';
-const defaultBaseUrl = 'http://127.0.0.1:8787/v1';
+const defaultBaseUrl = 'http://127.0.0.1:18610/v1';
 const ratios = ['16:9', '9:16', '1:1', '4:3', '3:4'];
 const durations = [5, 6, 8, 10];
 const referenceLimit = 28 * 1024 ** 2;

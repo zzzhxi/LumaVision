@@ -1,0 +1,2 @@
+deploy/install-muse2api.sh text eol=lf
+deploy/muse2api-release text eol=lf

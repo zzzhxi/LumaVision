@@ -12,6 +12,7 @@ Thumbs.db
 .DS_Store
 mail.local.json
 tools/media/*.exe
+/upstream/muse2api/
 
 # 本地开发记录与决策，不进入仓库
 findings.md
