@@ -446,9 +446,12 @@ body{min-height:100dvh;display:flex;flex-direction:column}body>main{flex:1;displ
 @media(max-width:580px){.draft-card .card-meta{left:7px;right:7px;padding:5px 7px;max-width:calc(100% - 14px)}.draft-text-preview{padding:91px 10px 60px;min-height:245px}.draft-text-preview p{font-size:12px}.draft-card .card-title{font-size:11px}.draft-card .card-subtitle{font-size:9px}}
 .draft-no-image{height:100%;min-height:250px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#536079;gap:10px}.draft-no-image svg{width:34px;height:34px}.draft-no-image p{margin:0;font-size:18px}.draft-no-image small{font-size:12px}
 
-/* Drafts use a steady workspace grid rather than balanced newspaper columns. */
-body:has(.creation-nav [data-view=drafts].active) .cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));columns:auto;gap:14px;align-items:start}.draft-text-preview small{position:static;display:block;margin-top:12px}.draft-card:has(.draft-text-preview) .card-quick-actions .card-author{color:#536079;text-shadow:none}
-@media(max-width:850px){body:has(.creation-nav [data-view=drafts].active) .cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}}
+/* My Works and Studio use the same media columns. Creative drafts keep their editing grid. */
+.gallery-section:has(:is(.work-status-tabs,.studio-tabs):not([hidden])) .cards{--workspace-columns:3;--workspace-gap:14px;columns:var(--workspace-columns);column-gap:var(--workspace-gap)}
+.gallery-section:has(.work-status-tabs:not([hidden]),.studio-tabs:not([hidden]) :is([data-studio-tab=generations],[data-studio-tab=submissions]).active) .cards > :is(.card,.video-job){margin-block-end:var(--workspace-gap)}
+.gallery-section:has(.studio-tabs:not([hidden]) [data-studio-tab=drafts].active) .cards{display:grid;grid-template-columns:repeat(var(--workspace-columns),minmax(0,1fr));columns:auto;gap:var(--workspace-gap);align-items:start}
+@media(max-width:850px){.gallery-section:has(:is(.work-status-tabs,.studio-tabs):not([hidden])) .cards{--workspace-columns:2;--workspace-gap:10px}}
+.draft-text-preview small{position:static;display:block;margin-top:12px}.draft-card:has(.draft-text-preview) .card-quick-actions .card-author{color:#536079;text-shadow:none}
 @media(max-width:580px){.draft-card:not(:has(.draft-text-preview)) .card-visual{width:100%;height:210px;aspect-ratio:auto}.draft-card .card-open img{height:100%;object-fit:cover}}
 .draft-card .card-quick-actions{grid-template-columns:1fr auto auto auto}@media(max-width:580px){.draft-card .card-quick-actions{grid-template-columns:repeat(3,1fr)}.draft-card .card-quick-actions [data-apply]{grid-column:1/-1}.draft-card:not(:has(.draft-text-preview)) .card-visual{height:250px}.draft-text-preview{padding-bottom:100px}}
 .publishing-draft .card-meta{display:block;position:absolute;top:40px;left:11px;right:11px;z-index:2;background:#fffffff0;border-radius:8px;padding:7px 9px;width:fit-content;max-width:calc(100% - 22px)}.publishing-draft .card-title{font-size:12px;color:#1b1b1b}.publishing-draft .card-subtitle{font-size:10px;color:#4b5563}.publishing-draft .draft-badge{font-size:9px;white-space:nowrap}.publishing-draft:has(.draft-text-preview) .card-visual{aspect-ratio:auto}.publishing-draft:has(.draft-text-preview) .card-quick-actions{opacity:1}.publishing-draft:has(.draft-text-preview) .card-visual:after{display:none}.publishing-draft:has(.draft-text-preview) .card-author{color:#536079;text-shadow:none}@media(max-width:580px){.publishing-draft:not(:has(.draft-text-preview)) .card-visual{width:100%;height:250px;aspect-ratio:auto}.publishing-draft .card-open img{height:100%;object-fit:cover}}
@@ -569,7 +572,7 @@ body:has(.creation-nav [data-view=drafts].active) .cards{display:grid;grid-templ
 .admin-user-actions .button.danger:hover{background:#f7dedc}
 .admin-generation-card{flex-direction:row;align-items:center;justify-content:space-between;gap:18px}
 .admin-generation-card .profile-hint{margin:6px 0 0;max-width:560px}
-.video-job{min-width:0;overflow:hidden;border:1px solid #e4e6f0;border-radius:13px;background:#fff}
+.video-job{display:inline-block;width:100%;min-width:0;break-inside:avoid;vertical-align:top;overflow:hidden;border:1px solid #e4e6f0;border-radius:13px;background:#fff}
 .video-job-preview{aspect-ratio:16/7;min-height:74px;display:grid;place-items:center;position:relative;background:#eff0fa;color:#5964bd}
 .video-job-preview svg{width:23px;height:23px}
 .video-job:not(.is-stopped) .video-job-preview::after{content:'';position:absolute;width:42px;height:42px;border:2px solid #d1d5ef;border-top-color:currentColor;border-radius:50%;animation:video-job-spin 1.3s linear infinite}
