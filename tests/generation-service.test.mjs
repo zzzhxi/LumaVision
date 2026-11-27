@@ -278,18 +278,22 @@ test('上游400的失败原因原样回传，正文形状不影响提示，错�
   for (const [body, type] of bodies) {
     env.mode('policy'); env.policy(body, type);
     const result = await env.generate(payload());
-    assert.equal(result.status, 502);
+    assert.equal(result.status, 400);
     assert.ok(result.body.error.includes(policy), '应回传上游原因，实际：' + result.body.error);
     assert.equal(JSON.stringify(result.body).includes(key), false);
   }
+  env.mode('policy'); env.policy('<!DOCTYPE html><html><body>blocked</body></html>', 'text/html');
+  const html = await env.generate(payload());
+  assert.equal(html.status, 400);
+  assert.equal(html.body.error, '生图服务拒绝请求（HTTP 400）。');
   env.mode('policy'); env.policy('Bearer ' + key + ' 不可用', 'text/plain');
   const leaked = await env.generate(payload());
-  assert.equal(leaked.status, 502); assert.equal(JSON.stringify(leaked.body).includes(key), false);
+  assert.equal(leaked.status, 400); assert.equal(JSON.stringify(leaked.body).includes(key), false);
 });
 
 test('上游错误、限流、超时和无效结果均无成功记录且不自动重试，错误不泄露Key', async t => {
   const env = await setup(t, { timeoutMs: 30 }); await env.configure();
-  for (const [mode, status] of [['auth', 502], ['size', 502], ['rate', 429], ['network', 502], ['timeout', 504], ['json', 502], ['empty', 502], ['invalid', 502]]) {
+  for (const [mode, status] of [['auth', 502], ['size', 400], ['rate', 429], ['network', 502], ['timeout', 504], ['json', 502], ['empty', 502], ['invalid', 502]]) {
     env.mode(mode); const input = payload(), before = env.calls.length;
     const result = await env.generate(input); assert.equal(result.status, status, mode);
     assert.equal(JSON.stringify(result.body).includes(key), false);

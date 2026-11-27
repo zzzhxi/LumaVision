@@ -314,8 +314,10 @@ export function createGenerationUI({ request, session, escape, toast, completed,
         payload.set('metadata', JSON.stringify({ ...metadata, requestId }));
         for (const file of files) payload.append('files', file);
         const response = await fetch(video ? '/api/video-jobs' : '/api/generations', { method: 'POST', body: payload });
-        let result = await response.json();
-        if (!response.ok) throw new Error(result.error || '生成失败，请稍后再试。');
+        const contentType = response.headers.get('content-type') || '';
+        let result = contentType.includes('application/json') ? await response.json().catch(() => null) : null;
+        if (!response.ok) throw new Error(result?.error || `生成失败（HTTP ${response.status}），请稍后再试。`);
+        if (!result) throw new Error('生成服务返回了无法识别的结果，请稍后再试。');
         while (!video && result.job && session().epoch === epoch) {
           if (result.job.status === 'failed') {
             lastMuseRequest = null;

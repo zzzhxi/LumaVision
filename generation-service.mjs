@@ -164,7 +164,8 @@ export function createGenerationService(storageRoot, generations, { fetchImpl = 
       const message = response.status === 401 || response.status === 403 ? '生图服务密钥无效或无权限，请联系管理员。'
         : response.status === 429 ? '生图服务请求受限，请稍后再试。' + (detail ? detail : '')
         : '生图服务拒绝请求（HTTP ' + response.status + '）' + (detail ? '：' + detail : '。');
-      const failure = new HttpError(response.status === 429 ? 429 : 502, message);
+      // 上游 4xx 是请求或内容本身被拒绝，保留 4xx 让原文穿过 CDN 的错误页处理。
+      const failure = new HttpError(response.status === 401 || response.status === 403 || response.status >= 500 ? 502 : response.status, message);
       failure.retryable = response.status === 429 || response.status >= 500;
       throw failure;
     }
